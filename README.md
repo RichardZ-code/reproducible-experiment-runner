@@ -86,7 +86,7 @@ Each invocation's manifest records its workflow, selected environment and Git ob
 
 ## Benchmarks
 
-The selected [P09 raw dataset](benchmarks/results/mac-arm64-20260928-p09-scoped/samples.jsonl) has five valid measured repetitions per condition, with 65 measured observations total. External CLI wall time includes process and runner overhead. It was collected on an Apple M3 Mac (eight reported logical cores, 16 GiB), macOS 26.6.2 arm64, Python 3.12.14 and SQLite 3.53.1, under scoped process-control permission. The measured checkout was dirty at revision `7f50175`; its recorded code/workload fingerprint still matches the 27 relevant current files. The [protocol and exclusions](benchmarks/README.md) and [full results](benchmarks/results/mac-arm64-20260928-p09-scoped/summary.md) describe the context and limits.
+The selected [P09 raw dataset](benchmarks/results/mac-arm64-20260928-p09-scoped/samples.jsonl) has five valid measured repetitions per condition, with 65 measured observations total. External CLI wall time includes process and runner overhead. It was collected on an Apple M3 Mac (eight reported logical cores, 16 GiB), macOS 26.6.2 arm64, Python 3.12.14 and SQLite 3.53.1, under scoped process-control permission. The measured checkout was dirty at revision `7f50175`. Its recorded code/workload fingerprint identifies the measured source; the current `executor.py` differs after the P12 publication-error correction. The [protocol and exclusions](benchmarks/README.md) and [full results](benchmarks/results/mac-arm64-20260928-p09-scoped/summary.md) describe the context and limits.
 
 | Condition | Median wall time | Verified task disposition |
 | --- | ---: | --- |

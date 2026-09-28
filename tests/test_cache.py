@@ -4,17 +4,21 @@ import asyncio
 import hashlib
 import json
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
 from repro_runner import cache as cache_module
 from repro_runner import executor
 from repro_runner.cache import CacheConflict, CacheStorage
+from repro_runner.cli import app
 from repro_runner.config import Task, load_workflow
 from repro_runner.hashing import Artifact, canonical_bytes, task_identity
-from repro_runner.scheduler import run_workflow
+from repro_runner.scheduler import resume_workflow, run_workflow
 
 
 def call(coroutine):
@@ -436,7 +440,7 @@ def test_cache_store_copy_and_rename_errors_are_infrastructure_failures(
     assert (tmp_path / "out/a.txt").read_text() == "a:"
 
 
-def test_restore_publication_failure_blocks_descendant_and_preserves_entry(
+def test_restore_publication_failure_aborts_and_preserves_entry(
     tmp_path: Path, monkeypatch
 ) -> None:
     marker = tmp_path / "markers"
@@ -460,11 +464,36 @@ def test_restore_publication_failure_blocks_descendant_and_preserves_entry(
         return original(source, destination)
 
     monkeypatch.setattr(executor.os, "replace", denied)
-    second = run(path)
-    assert second.tasks["a"].state == "failed"
-    assert second.tasks["b"].state == "blocked"
-    assert second.tasks["a"].launched is False
+    aborted = CliRunner().invoke(app, ["run", str(path)])
+    assert aborted.exit_code == 3, aborted.output
+    assert "PublicationOperationalError" in aborted.output
+    assert "injected destination denial" in aborted.output
     assert entry.is_dir()
+    assert marker.read_text().splitlines() == ["a", "b"]
+    with closing(sqlite3.connect(tmp_path / ".repro/state.sqlite3")) as connection:
+        run_id = connection.execute(
+            "SELECT run_id FROM runs ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()[0]
+        assert connection.execute(
+            "SELECT outcome FROM runs WHERE run_id=?", (run_id,)
+        ).fetchone() == ("interrupted",)
+        assert connection.execute(
+            "SELECT task_id,state FROM tasks WHERE run_id=? ORDER BY task_id",
+            (run_id,),
+        ).fetchall() == [("a", "interrupted"), ("b", "interrupted")]
+        assert connection.execute(
+            "SELECT task_id,state,launch_state FROM attempts WHERE run_id=?",
+            (run_id,),
+        ).fetchall() == [("a", "interrupted", "not_started")]
+        assert connection.execute(
+            "SELECT COUNT(*) FROM artifacts WHERE run_id=?", (run_id,)
+        ).fetchone() == (0,)
+    monkeypatch.setattr(executor.os, "replace", original)
+    monkeypatch.chdir(tmp_path)
+    resumed = call(resume_workflow(run_id, None, asyncio.Event(), asyncio.Event()))
+    assert resumed.state == "succeeded"
+    assert resumed.tasks["a"].state == "cached"
+    assert resumed.tasks["b"].state == "cached"
     assert marker.read_text().splitlines() == ["a", "b"]
 
 
@@ -473,10 +502,16 @@ def test_missing_output_does_not_populate_entry(tmp_path: Path) -> None:
     install_script(tmp_path, marker)
     declaration = task("a")
     declaration["outputs"].append("out/missing.txt")
-    path = workflow(tmp_path, {"a": declaration})
-    result = run(path)
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out/a.txt").write_text("old")
+    path = workflow(tmp_path, {"a": declaration, "b": task("b")})
+    result = run(path, workers=1)
+    assert result.state == "failed"
     assert result.tasks["a"].state == "failed"
     assert result.tasks["a"].launched
+    assert result.tasks["b"].state == "succeeded"
+    assert (tmp_path / "out/a.txt").read_text() == "old"
+    assert (tmp_path / "out/b.txt").read_text() == "b:"
     assert not (tmp_path / ".repro/cache/v1" / result.tasks["a"].cache_key).exists()
 
 

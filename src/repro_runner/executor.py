@@ -49,6 +49,10 @@ class TaskFailure(Exception):
         self.category = category
 
 
+class PublicationOperationalError(Exception):
+    """Workspace output publication failed for an operational reason."""
+
+
 @dataclass
 class TaskResult:
     task_id: str
@@ -442,8 +446,8 @@ async def execute_task(
             except InterruptedError:
                 raise
             except OSError as error:
-                raise TaskFailure(
-                    f"publication failed: {error}", "publication"
+                raise PublicationOperationalError(
+                    f"publication failed: {error}"
                 ) from error
 
         if cache is not None:

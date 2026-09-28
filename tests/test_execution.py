@@ -3,9 +3,11 @@
 import asyncio
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -15,7 +17,7 @@ from repro_runner import executor, scheduler
 from repro_runner.config import load_workflow
 from repro_runner.executor import ProcessOwner
 from repro_runner.ownership import workspace_lock
-from repro_runner.scheduler import run_workflow
+from repro_runner.scheduler import resume_workflow, run_workflow
 
 RUNNER = Path(sys.prefix) / "bin" / "runner"
 
@@ -411,11 +413,17 @@ def test_changed_producer_artifact_is_rejected(
     assert result.tasks["b"].launched is False
 
 
-def test_publication_failure_blocks_dependents(
+def test_publication_failure_aborts_without_accepting_partial_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "task.py").write_text(
-        "import pathlib; pathlib.Path('a').write_text('new a'); pathlib.Path('b').write_text('new b')"
+        """import pathlib,sys
+if len(sys.argv) == 1:
+    pathlib.Path('a').write_text('new a')
+    pathlib.Path('b').write_text('new b')
+else:
+    pathlib.Path('c').write_text(pathlib.Path('a').read_text())
+"""
     )
     (tmp_path / "b").write_text("old b")
     path = workflow_file(
@@ -428,7 +436,7 @@ def test_publication_failure_blocks_dependents(
             },
             "next": {
                 "deps": ["first"],
-                "command": ["python", "task.py"],
+                "command": ["python", "task.py", "next"],
                 "inputs": ["task.py", "a"],
                 "outputs": ["c"],
             },
@@ -442,14 +450,154 @@ def test_publication_failure_blocks_dependents(
         return original(source, target)
 
     monkeypatch.setattr(executor.os, "replace", fail_second)
-    result = execute(path)
-    assert result.state == "failed"
-    assert result.tasks["first"].state == "failed"
-    assert "publication failed" in result.tasks["first"].reason
-    assert result.tasks["next"].state == "blocked"
+    with pytest.raises(
+        executor.PublicationOperationalError,
+        match="injected second replacement failure",
+    ):
+        execute(path)
     assert (tmp_path / "a").read_text() == "new a"
     assert (tmp_path / "b").read_text() == "old b"
+    assert not (tmp_path / "c").exists()
     assert not list(tmp_path.glob(".repro-tmp-*"))
+    with closing(sqlite3.connect(tmp_path / ".repro/state.sqlite3")) as connection:
+        run_id = connection.execute("SELECT run_id FROM runs").fetchone()[0]
+        assert connection.execute("SELECT outcome FROM runs").fetchone() == (
+            "interrupted",
+        )
+        assert connection.execute(
+            "SELECT task_id,state FROM tasks ORDER BY task_id"
+        ).fetchall() == [("first", "interrupted"), ("next", "interrupted")]
+        assert connection.execute(
+            "SELECT task_id,state,exit_code FROM attempts"
+        ).fetchall() == [("first", "interrupted", 0)]
+        assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM resolutions").fetchone() == (0,)
+    monkeypatch.setattr(executor.os, "replace", original)
+    monkeypatch.chdir(tmp_path)
+    resumed = asyncio.run(
+        resume_workflow(run_id, None, asyncio.Event(), asyncio.Event())
+    )
+    assert resumed.state == "succeeded"
+    assert resumed.tasks["first"].state == "succeeded"
+    assert resumed.tasks["next"].state == "succeeded"
+    assert (tmp_path / "a").read_text() == "new a"
+    assert (tmp_path / "b").read_text() == "new b"
+    assert (tmp_path / "c").read_text() == "new a"
+    with closing(sqlite3.connect(tmp_path / ".repro/state.sqlite3")) as connection:
+        assert connection.execute(
+            "SELECT state FROM attempts WHERE task_id='first' ORDER BY attempt_no"
+        ).fetchall() == [("interrupted",), ("succeeded",)]
+
+
+def test_publication_error_exits_three_and_reaps_active_child(tmp_path: Path) -> None:
+    active = tmp_path / "active.pid"
+    queued = tmp_path / "queued.marker"
+    (tmp_path / "task.py").write_text(
+        """import os, pathlib, sys, time
+name, active, queued = sys.argv[1:]
+if name == 'a':
+    while not pathlib.Path(active).exists():
+        time.sleep(0.01)
+    pathlib.Path('locked').mkdir(exist_ok=True)
+    pathlib.Path('locked/a').write_text('complete')
+elif name == 'b':
+    pathlib.Path(active).write_text(str(os.getpid()))
+    print('b started', flush=True)
+    time.sleep(30)
+    pathlib.Path('out').mkdir()
+    pathlib.Path('out/b').write_text('late')
+else:
+    pathlib.Path(queued).write_text('launched')
+    pathlib.Path('out').mkdir()
+    pathlib.Path('out/c').write_text('late')
+"""
+    )
+    path = workflow_file(
+        tmp_path,
+        {
+            name: {
+                "command": ["python", "task.py", name, str(active), str(queued)],
+                "inputs": ["task.py"],
+                "outputs": ["locked/a" if name == "a" else f"out/{name}"],
+            }
+            for name in ("a", "b", "c")
+        },
+    )
+    # The separate CLI process injects a destination failure after both active
+    # children start. The wrapper works under root on Linux and on macOS.
+    wrapper = tmp_path / "deny_publication.py"
+    wrapper.write_text(
+        """import os, sys
+from pathlib import Path
+from repro_runner.cli import app
+original = os.replace
+def denied(source, destination):
+    if Path(destination).name == 'a' and Path(destination).parent.name == 'locked':
+        raise PermissionError('injected publication denial')
+    return original(source, destination)
+os.replace = denied
+sys.argv[0] = 'runner'
+app()
+"""
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(wrapper),
+            "run",
+            str(path),
+            "--workers",
+            "2",
+            "--no-cache",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    active_pid: int | None = None
+    try:
+        stdout, stderr = proc.communicate(timeout=15)
+        assert proc.returncode == 3, (stdout, stderr)
+        assert "injected publication denial" in stderr
+        assert active.exists()
+        active_pid = int(active.read_text())
+        with pytest.raises(ProcessLookupError):
+            os.killpg(active_pid, 0)
+        assert not queued.exists()
+        assert not (tmp_path / "locked/a").exists()
+        assert not (tmp_path / "out/b").exists()
+        with closing(sqlite3.connect(tmp_path / ".repro/state.sqlite3")) as connection:
+            assert connection.execute("SELECT outcome FROM runs").fetchone() == (
+                "interrupted",
+            )
+            assert connection.execute(
+                "SELECT task_id,state FROM tasks ORDER BY task_id"
+            ).fetchall() == [
+                ("a", "interrupted"),
+                ("b", "interrupted"),
+                ("c", "interrupted"),
+            ]
+        assert (
+            "b started"
+            in next(
+                (tmp_path / ".repro/runs").glob("*/attempts/b/1/stdout.log")
+            ).read_text()
+        )
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate(timeout=5)
+        if active.exists():
+            active_pid = int(active.read_text())
+            try:
+                os.killpg(active_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_stop_during_publication_does_not_accept_task(
