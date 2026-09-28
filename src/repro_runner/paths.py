@@ -83,6 +83,20 @@ def inspect_file(
     return None
 
 
+def ensure_real_directory(path: Path) -> None:
+    """Create missing components without accepting a symlinked parent."""
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            current.mkdir()
+            info = current.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValidationError(f"not a real directory: {current}")
+
+
 def existing_matches(workspace: Path, pattern: str) -> tuple[str, ...]:
     """Expand a final-basename pattern without following directory links."""
     directory, _, basename = pattern.rpartition("/")

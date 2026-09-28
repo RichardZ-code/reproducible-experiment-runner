@@ -73,7 +73,7 @@ def execute(path: Path, workers: int = 4):
     return asyncio.run(
         asyncio.wait_for(
             run_workflow(
-                load_workflow(path), workers, asyncio.Event(), asyncio.Event()
+                load_workflow(path), workers, asyncio.Event(), asyncio.Event(), False
             ),
             timeout=15,
         )
@@ -312,9 +312,21 @@ def test_installed_cli_from_other_directory(tmp_path: Path) -> None:
         check=False,
     )
     assert default.returncode == 0, default.stderr
-    assert "Cache is not implemented yet" in default.stdout
+    assert "executed=1, cached=0, cache_misses=1" in default.stdout
     assert len(events(marker)) == 4
     assert len(list((workspace / ".repro/runs").iterdir())) == 2
+    warm = subprocess.run(
+        [str(RUNNER), "run", str(path)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert warm.returncode == 0, warm.stderr
+    assert "executed=0, cached=1, cache_misses=0" in warm.stdout
+    assert len(events(marker)) == 4
 
 
 def test_changed_source_during_child_execution_is_rejected(tmp_path: Path) -> None:
@@ -465,7 +477,9 @@ def test_stop_during_publication_does_not_accept_task(
             stop.set()
 
     monkeypatch.setattr(executor.os, "replace", stop_after_first)
-    result = asyncio.run(run_workflow(load_workflow(path), 1, stop, asyncio.Event()))
+    result = asyncio.run(
+        run_workflow(load_workflow(path), 1, stop, asyncio.Event(), False)
+    )
     assert result.state == "interrupted"
     assert result.tasks["first"].state == "interrupted"
     assert (tmp_path / "a").read_text() == "a"

@@ -44,7 +44,7 @@ def validate(
 
 
 async def _run_with_signals(
-    validated: Workflow, workers: int
+    validated: Workflow, workers: int, use_cache: bool
 ) -> tuple[RunResult, int | None]:
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -65,7 +65,9 @@ async def _run_with_signals(
     for number in prior:
         loop.add_signal_handler(number, request_stop, number)
     try:
-        result = await run_workflow(validated, workers, stop, owner_stop_again)
+        result = await run_workflow(
+            validated, workers, stop, owner_stop_again, use_cache
+        )
         return result, signal_number
     finally:
         for number, handler in prior.items():
@@ -89,10 +91,10 @@ def run(
     except OSError as error:
         typer.echo(f"Cannot inspect workflow: {error}", err=True)
         raise typer.Exit(code=3) from error
-    if not no_cache:
-        typer.echo("Cache is not implemented yet; eligible tasks execute anew.")
     try:
-        result, signal_number = asyncio.run(_run_with_signals(validated, workers))
+        result, signal_number = asyncio.run(
+            _run_with_signals(validated, workers, not no_cache)
+        )
     except OwnershipConflict as error:
         typer.echo(f"Workspace ownership conflict: {error}", err=True)
         raise typer.Exit(code=3) from error
@@ -104,7 +106,7 @@ def run(
         raise typer.Exit(code=3) from error
     counts = {
         state: sum(item.state == state for item in result.tasks.values())
-        for state in ("succeeded", "failed", "blocked", "interrupted")
+        for state in ("succeeded", "cached", "failed", "blocked", "interrupted")
     }
     for task_id in validated.graph.order:
         task = result.tasks[task_id]
@@ -112,10 +114,20 @@ def run(
         typer.echo(f"{task_id}: {task.state}{details}")
         if task.state in {"failed", "interrupted"} and task.stdout:
             typer.echo(f"  logs: {task.stdout}, {task.stderr}")
-    typer.echo(
-        f"Outcome: {result.state}; executed={sum(item.launched for item in result.tasks.values())}, "
-        f"failed={counts['failed']}, blocked={counts['blocked']}, interrupted={counts['interrupted']}"
+    summary = (
+        f"Outcome: {result.state}; "
+        f"executed={sum(item.launched for item in result.tasks.values())}"
     )
+    if not no_cache:
+        summary += (
+            f", cached={counts['cached']}, "
+            f"cache_misses={sum(item.cache_miss for item in result.tasks.values())}"
+        )
+    summary += (
+        f", failed={counts['failed']}, blocked={counts['blocked']}, "
+        f"interrupted={counts['interrupted']}"
+    )
+    typer.echo(summary)
     typer.echo(f"Duration: {result.duration_seconds:.3f}s")
     if signal_number is not None:
         raise typer.Exit(code=128 + signal_number)

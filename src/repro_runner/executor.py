@@ -1,27 +1,43 @@
 """Bounded execution of validated workflows in private attempt directories."""
 
 import asyncio
-import hashlib
 import os
 import shutil
 import signal
-import stat
 import sys
 import time
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Iterator, Literal
+from typing import Literal
 
+from repro_runner.cache import (
+    CacheConflict,
+    CacheOperationalError,
+    CacheStorage,
+    InvalidEntry,
+)
 from repro_runner.config import Task, Workflow, resolve_inputs
 from repro_runner.errors import ValidationError
+from repro_runner.hashing import (
+    Artifact,
+    environment_record,
+    task_identity,
+)
+from repro_runner.hashing import (
+    copy_file as _copy,
+)
+from repro_runner.hashing import (
+    hash_file as _hash,
+)
+from repro_runner.paths import ensure_real_directory as _real_directory
 from repro_runner.paths import inspect_file
 
-_CHUNK = 1024 * 1024
 TERM_GRACE_SECONDS = 5.0
-State = Literal["pending", "running", "succeeded", "failed", "blocked", "interrupted"]
+State = Literal[
+    "pending", "running", "succeeded", "cached", "failed", "blocked", "interrupted"
+]
 
 
 class TaskFailure(Exception):
@@ -30,12 +46,6 @@ class TaskFailure(Exception):
     def __init__(self, message: str, category: str = "task") -> None:
         super().__init__(message)
         self.category = category
-
-
-@dataclass(frozen=True)
-class Artifact:
-    digest: str
-    size: int
 
 
 @dataclass
@@ -54,6 +64,8 @@ class TaskResult:
     resolved_executable: str | None = None
     artifacts: dict[str, Artifact] = field(default_factory=dict)
     launched: bool = False
+    cache_key: str | None = None
+    cache_miss: bool = False
 
 
 @dataclass
@@ -68,58 +80,6 @@ class RunResult:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-
-
-def _real_directory(path: Path) -> None:
-    """Create missing parents one component at a time without following links."""
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current /= part
-        try:
-            info = current.lstat()
-        except FileNotFoundError:
-            current.mkdir()
-            info = current.lstat()
-        if not stat.S_ISDIR(info.st_mode):
-            raise ValidationError(f"not a real directory: {current}")
-
-
-@contextmanager
-def _reader(path: Path) -> Iterator[BinaryIO]:
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise ValidationError(f"not a regular file: {path}")
-        with os.fdopen(descriptor, "rb", closefd=False) as source:
-            yield source
-    finally:
-        os.close(descriptor)
-
-
-async def _hash(path: Path) -> Artifact:
-    digest = hashlib.sha256()
-    size = 0
-    with _reader(path) as source:
-        while chunk := source.read(_CHUNK):
-            digest.update(chunk)
-            size += len(chunk)
-            await asyncio.sleep(0)
-    return Artifact(digest.hexdigest(), size)
-
-
-async def _copy(source: Path, destination: Path) -> Artifact:
-    digest = hashlib.sha256()
-    size = 0
-    with _reader(source) as input_file, destination.open("xb") as output_file:
-        while chunk := input_file.read(_CHUNK):
-            output_file.write(chunk)
-            digest.update(chunk)
-            size += len(chunk)
-            await asyncio.sleep(0)
-    return Artifact(digest.hexdigest(), size)
 
 
 def _command(task: Task) -> tuple[str, ...]:
@@ -263,6 +223,22 @@ async def _check_inputs(
             raise TaskFailure(f"staged input changed: {name!r}", "input")
 
 
+async def _dependency_outputs(
+    workflow: Workflow, task: Task, accepted: dict[str, Artifact]
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for dependency in sorted(task.deps):
+        for path in sorted(workflow.tasks[dependency].outputs):
+            expected = accepted.get(path)
+            if expected is None:
+                raise RuntimeError(f"missing accepted dependency artifact {path!r}")
+            inspect_file(workflow.workspace, path, required=True)
+            if await _hash(workflow.workspace / path) != expected:
+                raise TaskFailure(f"dependency output changed: {path!r}", "input")
+            rows.append({"task": dependency, "path": path, "sha256": expected.digest})
+    return rows
+
+
 async def _freeze_outputs(task: Task, work: Path, publish: Path) -> dict[str, Artifact]:
     artifacts: dict[str, Artifact] = {}
     for name in sorted(task.outputs):
@@ -287,6 +263,9 @@ async def _publish(
     snapshots: dict[str, Artifact],
     work: Path,
     stop: asyncio.Event,
+    accepted: dict[str, Artifact],
+    dependency_rows: list[dict[str, str]],
+    environment: dict[str, object],
 ) -> None:
     temporaries: dict[str, Path] = {}
     try:
@@ -307,6 +286,13 @@ async def _publish(
         for name in sorted(artifacts):
             inspect_file(workflow.workspace, name, required=False)
         await _check_inputs(workflow, task_id, names, snapshots, work)
+        if (
+            await _dependency_outputs(workflow, workflow.tasks[task_id], accepted)
+            != dependency_rows
+        ):
+            raise TaskFailure("dependency outputs changed before publication", "input")
+        if await environment_record() != environment:
+            raise TaskFailure("environment changed before publication", "environment")
         for name in sorted(artifacts):
             if stop.is_set():
                 raise InterruptedError("run interrupted during publication")
@@ -325,11 +311,14 @@ async def execute_task(
     run_dir: Path,
     accepted: dict[str, Artifact],
     owner: ProcessOwner,
+    cache: CacheStorage | None,
+    environment: dict[str, object],
 ) -> TaskResult:
     task = workflow.tasks[task_id]
     result = TaskResult(task_id, "running", command=task.command)
     start: float | None = None
     process: asyncio.subprocess.Process | None = None
+    cache_temporary: Path | None = None
     try:
         if owner.stop.is_set():
             raise InterruptedError("run interrupted before task start")
@@ -342,8 +331,6 @@ async def execute_task(
         publish = attempt / "publish"
         work.mkdir(parents=True)
         publish.mkdir()
-        result.stdout = str((attempt / "stdout.log").relative_to(workflow.workspace))
-        result.stderr = str((attempt / "stderr.log").relative_to(workflow.workspace))
         staged_names, snapshots = await _stage_inputs(
             workflow, task_id, work, accepted, owner.stop
         )
@@ -351,6 +338,62 @@ async def execute_task(
             raise TaskFailure("input inventory changed while staging", "input")
         for name in task.outputs:
             _real_directory((work / name).parent)
+        dependency_rows = await _dependency_outputs(workflow, task, accepted)
+        identity = task_identity(task, snapshots, dependency_rows, environment)
+        result.cache_key = identity.key
+
+        async def publish_outputs(artifacts: dict[str, Artifact]) -> None:
+            try:
+                await _publish(
+                    workflow,
+                    artifacts,
+                    publish,
+                    task_id,
+                    staged_names,
+                    snapshots,
+                    work,
+                    owner.stop,
+                    accepted,
+                    dependency_rows,
+                    environment,
+                )
+            except InterruptedError:
+                raise
+            except OSError as error:
+                raise TaskFailure(
+                    f"publication failed: {error}", "publication"
+                ) from error
+
+        if cache is not None:
+            try:
+                cached = await cache.lookup(identity, task.outputs, owner.stop)
+            except OSError as error:
+                raise CacheOperationalError(f"cache lookup failed: {error}") from error
+            if cached is not None:
+                try:
+                    await cache.restore(identity, cached, publish, owner.stop)
+                except InvalidEntry as error:
+                    try:
+                        cache.quarantine(identity, str(error))
+                    except OSError as failure:
+                        raise CacheOperationalError(
+                            f"cache quarantine failed: {failure}"
+                        ) from failure
+                except OSError as error:
+                    raise CacheOperationalError(
+                        f"cache restoration failed: {error}"
+                    ) from error
+                else:
+                    await publish_outputs(cached)
+                    if owner.stop.is_set():
+                        raise InterruptedError("run interrupted during restoration")
+                    result.artifacts = cached
+                    result.state = "cached"
+                    return result
+            result.cache_miss = True
+
+        result.stdout = str((attempt / "stdout.log").relative_to(workflow.workspace))
+        result.stderr = str((attempt / "stderr.log").relative_to(workflow.workspace))
         with (
             (attempt / "stdout.log").open("wb") as stdout,
             (attempt / "stderr.log").open("wb") as stderr,
@@ -386,26 +429,35 @@ async def execute_task(
         await _check_inputs(workflow, task_id, staged_names, snapshots, work)
         if owner.stop.is_set():
             raise InterruptedError("run interrupted before publication")
-        try:
-            await _publish(
-                workflow,
-                artifacts,
-                publish,
-                task_id,
-                staged_names,
-                snapshots,
-                work,
-                owner.stop,
-            )
-        except InterruptedError:
-            raise
-        except OSError as error:
-            raise TaskFailure(f"publication failed: {error}", "publication") from error
+        if cache is not None:
+            try:
+                cache_temporary = await cache.prepare(
+                    identity, artifacts, publish, owner.stop
+                )
+            except OSError as error:
+                raise CacheOperationalError(
+                    f"cache preparation failed: {error}"
+                ) from error
+        await publish_outputs(artifacts)
+        if cache is not None:
+            try:
+                await cache.publish(cache_temporary, identity, artifacts, owner.stop)
+            except OSError as error:
+                raise CacheOperationalError(
+                    f"cache publication failed: {error}"
+                ) from error
         if owner.stop.is_set():
             raise InterruptedError("run interrupted during publication")
         result.artifacts = artifacts
         result.state = "succeeded"
-    except (ValidationError, TaskFailure, FileNotFoundError, PermissionError) as error:
+    except (
+        ValidationError,
+        TaskFailure,
+        CacheConflict,
+        InvalidEntry,
+        FileNotFoundError,
+        PermissionError,
+    ) as error:
         result.state = "failed"
         result.reason = str(error)
         result.error_category = (
@@ -422,6 +474,11 @@ async def execute_task(
             await process.wait()
         raise
     finally:
+        if cache is not None and cache_temporary is not None:
+            try:
+                cache.discard(cache_temporary)
+            except OSError as error:
+                raise CacheOperationalError(f"cache cleanup failed: {error}") from error
         if process is not None:
             owner.groups.pop(process.pid, None)
         if start is not None:

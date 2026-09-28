@@ -1,6 +1,6 @@
 # Design decisions
 
-Status: P01 decisions are the working contract for staged implementation. The P04 clarification below describes local work awaiting review; other rows do not claim completed behavior.
+Status: P01 decisions are the working contract for staged implementation. P04 and P05 clarifications below describe local work awaiting review; other rows do not claim completed behavior.
 
 ## A. Requirements carried forward from the guide
 
@@ -54,6 +54,14 @@ The scaffold uses `setuptools>=77` and `wheel` as build requirements. Setuptools
 The P04 request moves the minimal OS-backed `.repro/lock` guard into concurrent execution because P04 now publishes shared workspace outputs. The checklist originally groups ownership with P06. P04 holds a nonblocking `fcntl.flock` through ordinary execution and cleanup, including cancellation. It does not add SQLite state, owner-death reconciliation, or resume; those remain P06. P04 also uses private attempt copies and streaming SHA-256 checks solely for live-run input and output acceptance. Cache identity and storage remain P05.
 
 A task slot covers readiness checks, staging, child execution, verification, and publication. This keeps at most `workers` active attempts and releases a slot only after task finalization. Output replacement is per-file and sorted; several replacements are not one atomic transaction. P04 does not roll back a partially published set after a later replacement fails. The existing five-second group-wide TERM grace applies on ordinary cancellation, followed by KILL of still-owned groups. A second signal skips the remaining grace period.
+
+## P05 cache format and error clarifications
+
+The v1 entry uses `metadata.json` with exactly `schema`, `key`, `identity`, and `artifacts`. Each artifact row contains `path`, lowercase SHA-256 `sha256`, and nonnegative integer `size`; bytes live at `files/<path>`. Metadata and artifact inventory must match the requested key and all declared outputs exactly, with no unexpected entry files, symlinks, or special files. Duplicate JSON keys are invalid. A final valid entry for the same key and identical output hashes is retained; a valid entry with different hashes is a cache conflict, never overwritten. Invalid final entries are renamed to unique `.bad-...` siblings before recomputation. Genuine cache I/O errors abort the invocation. Temporary and quarantined entries are not automatically collected.
+
+Source recognition is bounded to the loaded package's resolved `src/repro_runner/__init__.py` and a matching project name/version in the adjacent `pyproject.toml`. This handles the existing local editable-import symlink without searching caller directories. A missing selected lock and a wheel install record `dependency_lock_sha256: null` and `dependency_lock_source: unavailable`; a present unsafe or unreadable lock is an error. Installed distribution names are normalized and sorted. This selected inventory is not a verification that installed bytes match a lock.
+
+P05 uses per-file workspace replacement, then final cache-directory rename, then in-memory task success and dependent readiness. A cache hit follows the same workspace replacement checks after copying every artifact into its private publication area. SIGKILL before final rename leaves only an ignored temporary; SIGKILL after rename leaves a reusable complete entry; interrupted multi-file restoration can leave workspace temporaries, and the next run restores the full output set. P06 must add durable success after cache publication and reconcile incomplete attempts. These checks do not make multiple filesystem replacements or future SQLite writes jointly atomic.
 
 ## C. Proposed departures and open decisions
 
