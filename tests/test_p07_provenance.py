@@ -58,13 +58,16 @@ def test_git_clean_dirty_nested_detached_and_ignored(
     assert observe_git(nested).dirty is True
     (root / "new-config.json").unlink()
     git(root, "checkout", "--detach", "-q", "HEAD")
+    detached_index_before = (root / ".git/index").read_bytes()
     assert observe_git(nested).commit == clean.commit
     assert observe_git(nested).dirty is False
+    assert (root / ".git/index").read_bytes() == detached_index_before
     other = repository(tmp_path / "other")
     monkeypatch.setenv("GIT_DIR", str(other / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    routed_index_before = (root / ".git/index").read_bytes()
     assert observe_git(nested).commit == clean.commit
-    assert (root / ".git/index").read_bytes() == index_before
+    assert (root / ".git/index").read_bytes() == routed_index_before
 
 
 def test_unborn_outside_missing_and_failed_git(tmp_path: Path, monkeypatch) -> None:
