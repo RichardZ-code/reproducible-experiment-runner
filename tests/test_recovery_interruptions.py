@@ -113,6 +113,13 @@ def kill_known_child(ready: Path) -> None:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # This fixture starts one child with no descendants. Darwin can reject
+            # group signaling after that child exits but before it is reaped.
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def cleanup_known_child(ready: Path) -> None:
@@ -173,6 +180,11 @@ def test_interrupted_run_retains_completed_work_and_retries_new_attempt(
             stdout,
             stderr,
         )
+        assert launches.read_text().splitlines() == ["a:1", "b:1"]
+        if method == "sigint":
+            with pytest.raises(ProcessLookupError):
+                os.killpg(int(ready.read_text()), 0)
+            old_child_cleaned = True
         if method == "sigkill":
             kill_known_child(ready)
             old_child_cleaned = True
@@ -228,7 +240,7 @@ def test_interrupted_run_retains_completed_work_and_retries_new_attempt(
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate(timeout=5)
-        if method == "sigkill" and not old_child_cleaned:
+        if not old_child_cleaned:
             kill_known_child(ready)
 
 

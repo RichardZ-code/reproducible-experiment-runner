@@ -1,6 +1,7 @@
 """Behavioral checks for bounded execution and verified publication."""
 
 import asyncio
+import errno
 import os
 import signal
 import sqlite3
@@ -679,6 +680,141 @@ def test_launch_handoff_cancel_reaps_child(
                 if launched and launched[0].returncode is None:
                     owner._signal_group(launched[0].pid, signal.SIGKILL)
                     await launched[0].wait()
+
+    asyncio.run(scenario())
+
+
+def test_cancel_reaps_exited_group_leader_and_kills_surviving_descendant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExitedLeader:
+        pid = 4242
+        waits = 0
+
+        async def wait(self) -> int:
+            self.waits += 1
+            return 0
+
+    leader = ExitedLeader()
+    signals: list[int] = []
+    descendant_alive = True
+
+    def group_signal(pid: int, number: int) -> None:
+        nonlocal descendant_alive
+        assert pid == leader.pid
+        signals.append(number)
+        if number == 0 and leader.waits == 0:
+            raise PermissionError(errno.EPERM, "unreaped leader")
+        if number == signal.SIGKILL:
+            descendant_alive = False
+
+    def missing_leader(pid: int) -> int:
+        assert pid == leader.pid
+        raise ProcessLookupError(errno.ESRCH, "exited leader")
+
+    monkeypatch.setattr(executor.os, "killpg", group_signal)
+    monkeypatch.setattr(executor.os, "getpgid", missing_leader)
+    repeated_stop = asyncio.Event()
+    repeated_stop.set()
+    owner = ProcessOwner(asyncio.Event(), repeated_stop)
+    owner.groups[leader.pid] = leader
+    asyncio.run(owner.cancel_all())
+
+    assert leader.waits >= 1
+    assert signals == [signal.SIGTERM, 0, 0, signal.SIGKILL]
+    assert not descendant_alive
+
+
+def test_live_group_permission_error_is_not_treated_as_exited_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LiveLeader:
+        pid = 4242
+        returncode: int | None = None
+        killed = False
+        waited = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.waited = True
+            self.returncode = -signal.SIGKILL
+            return self.returncode
+
+    leader = LiveLeader()
+
+    def denied_group_signal(pid: int, number: int) -> None:
+        assert pid == leader.pid and number == signal.SIGTERM
+        raise PermissionError(errno.EPERM, "genuine denial")
+
+    monkeypatch.setattr(executor.os, "killpg", denied_group_signal)
+    monkeypatch.setattr(executor.os, "getpgid", lambda pid: pid)
+    owner = ProcessOwner(asyncio.Event(), asyncio.Event())
+    owner.groups[leader.pid] = leader
+    with pytest.raises(PermissionError, match="genuine denial"):
+        asyncio.run(owner.cancel_all())
+    assert leader.killed and leader.waited
+
+
+def test_direct_kill_denial_still_reaps_other_owned_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        children: list[asyncio.subprocess.Process] = []
+        try:
+            for _ in range(2):
+                children.append(
+                    await asyncio.create_subprocess_exec(
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(30)",
+                        start_new_session=True,
+                    )
+                )
+            first, second = children
+            owner = ProcessOwner(asyncio.Event(), asyncio.Event())
+            owner.groups = {process.pid: process for process in children}
+            original_kill = asyncio.subprocess.Process.kill
+            group_error = PermissionError(errno.EPERM, "group signal denied")
+            kill_error = PermissionError(errno.EPERM, "first direct kill denied")
+
+            def denied_group_signal(pid: int, number: int) -> None:
+                assert pid in owner.groups and number == signal.SIGTERM
+                raise group_error
+
+            def selective_direct_kill(process: asyncio.subprocess.Process) -> None:
+                if process.pid == first.pid:
+                    raise kill_error
+                original_kill(process)
+
+            with monkeypatch.context() as patcher:
+                patcher.setattr(executor.os, "killpg", denied_group_signal)
+                patcher.setattr(
+                    asyncio.subprocess.Process, "kill", selective_direct_kill
+                )
+                patcher.setattr(executor, "TERM_GRACE_SECONDS", 0.5)
+                with pytest.raises(ExceptionGroup) as caught:
+                    await asyncio.wait_for(owner.cancel_all(), timeout=2)
+
+            assert caught.value.exceptions[:2] == (group_error, kill_error)
+            assert isinstance(caught.value.exceptions[2], TimeoutError)
+            assert "group signal denied" in str(caught.value)
+            assert "first direct kill denied" in str(caught.value)
+            assert "did not exit during cleanup" in str(caught.value)
+            assert first.returncode is None
+            assert second.returncode == -signal.SIGKILL
+            with pytest.raises(ProcessLookupError):
+                os.kill(second.pid, 0)
+        finally:
+            for process in children:
+                if process.returncode is None:
+                    try:
+                        os.kill(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            for process in children:
+                await asyncio.wait_for(process.wait(), timeout=5)
 
     asyncio.run(scenario())
 

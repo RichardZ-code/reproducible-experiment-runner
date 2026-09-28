@@ -149,11 +149,12 @@ class ProcessOwner:
         return process
 
     @staticmethod
-    def _signal_group(pid: int, number: int) -> None:
+    def _signal_group(pid: int, number: int) -> bool:
         try:
             os.killpg(pid, number)
         except ProcessLookupError:
-            pass
+            return False
+        return True
 
     @staticmethod
     def _group_exists(pid: int) -> bool:
@@ -162,6 +163,29 @@ class ProcessOwner:
         except ProcessLookupError:
             return False
         return True
+
+    @staticmethod
+    async def _owned_group_action(
+        process: asyncio.subprocess.Process, number: int
+    ) -> bool:
+        pid = process.pid
+
+        def action() -> bool:
+            if number == 0:
+                return ProcessOwner._group_exists(pid)
+            return ProcessOwner._signal_group(pid, number)
+
+        try:
+            return action()
+        except PermissionError:
+            try:
+                os.getpgid(pid)
+            except ProcessLookupError:
+                # Darwin may deny group signaling while its exited leader is unreaped.
+                # Reap that known child, then retry for any surviving descendants.
+                await process.wait()
+                return action()
+            raise
 
     async def cancel_all(self) -> None:
         while True:
@@ -176,19 +200,67 @@ class ProcessOwner:
 
     async def _terminate_groups(self, groups: tuple[int, ...]) -> None:
         processes = [self.groups[pid] for pid in groups if pid in self.groups]
-        for pid in groups:
-            self._signal_group(pid, signal.SIGTERM)
-        if not self.repeated_stop.is_set():
-            deadline = time.monotonic() + TERM_GRACE_SECONDS
-            while time.monotonic() < deadline and any(
-                self._group_exists(pid) for pid in groups
-            ):
-                if self.repeated_stop.is_set():
-                    break
-                await asyncio.sleep(0.05)
-        for pid in groups:
-            if self._group_exists(pid):
-                self._signal_group(pid, signal.SIGKILL)
+        try:
+            for process in processes:
+                await self._owned_group_action(process, signal.SIGTERM)
+            if not self.repeated_stop.is_set():
+                deadline = time.monotonic() + TERM_GRACE_SECONDS
+                while time.monotonic() < deadline:
+                    remaining = [
+                        await self._owned_group_action(process, 0)
+                        for process in processes
+                    ]
+                    if not any(remaining):
+                        break
+                    if self.repeated_stop.is_set():
+                        break
+                    await asyncio.sleep(0.05)
+            for process in processes:
+                if await self._owned_group_action(process, 0):
+                    await self._owned_group_action(process, signal.SIGKILL)
+        except PermissionError as group_error:
+            # Group access failed. Attempt every direct child before reporting errors.
+            cleanup_errors: list[tuple[int, str, Exception]] = []
+            waiters: dict[asyncio.Task[int], int] = {}
+            for process in processes:
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    except OSError as error:
+                        cleanup_errors.append((process.pid, "kill", error))
+                waiters[asyncio.create_task(process.wait())] = process.pid
+            if waiters:
+                done, pending = await asyncio.wait(waiters, timeout=TERM_GRACE_SECONDS)
+                for waiter in pending:
+                    waiter.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                for waiter in done:
+                    try:
+                        waiter.result()
+                    except Exception as error:
+                        cleanup_errors.append((waiters[waiter], "reap", error))
+                for waiter in pending:
+                    cleanup_errors.append(
+                        (
+                            waiters[waiter],
+                            "reap",
+                            TimeoutError("child did not exit during cleanup"),
+                        )
+                    )
+            if cleanup_errors:
+                details = "; ".join(
+                    f"child {pid} {action}: {type(error).__name__}: {error}"
+                    for pid, action, error in cleanup_errors
+                )
+                raise ExceptionGroup(
+                    f"group cleanup failed ({type(group_error).__name__}: "
+                    f"{group_error}); direct-child cleanup failed ({details})",
+                    [group_error, *(error for _, _, error in cleanup_errors)],
+                ) from group_error
+            raise
         await asyncio.gather(*(process.wait() for process in processes))
 
 
