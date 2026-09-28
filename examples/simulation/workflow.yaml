@@ -1,0 +1,26 @@
+schema_version: 1
+tasks:
+  generate:
+    command: [python, generate.py, --config, config/base.json, --seed, '1729', --output, out/input.json]
+    inputs: [generate.py, config/base.json]
+    outputs: [out/input.json]
+  simulate_a:
+    command: [python, simulate.py, --input, out/input.json, --config, config/a.json, --branch, a, --output, out/a.json]
+    deps: [generate]
+    inputs: [simulate.py, out/input.json, config/a.json]
+    outputs: [out/a.json]
+  simulate_b:
+    command: [python, simulate.py, --input, out/input.json, --config, config/b.json, --branch, b, --output, out/b.json]
+    deps: [generate]
+    inputs: [simulate.py, out/input.json, config/b.json]
+    outputs: [out/b.json]
+  simulate_c:
+    command: [python, simulate.py, --input, out/input.json, --config, config/c.json, --branch, c, --output, out/c.json]
+    deps: [generate]
+    inputs: [simulate.py, out/input.json, config/c.json]
+    outputs: [out/c.json]
+  summarize:
+    command: [python, summarize.py, --a, out/a.json, --b, out/b.json, --c, out/c.json, --output, out/summary.json]
+    deps: [simulate_a, simulate_b, simulate_c]
+    inputs: [summarize.py, out/a.json, out/b.json, out/c.json]
+    outputs: [out/summary.json]

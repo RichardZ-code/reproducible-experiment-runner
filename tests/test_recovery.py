@@ -329,7 +329,9 @@ def test_stored_unsafe_artifact_path_rejected_without_touching_sentinel(
         )
         connection.commit()
     rejected = cli(workspace, "resume", identity)
-    assert rejected.returncode == 2 and "artifact inventory" in rejected.stderr
+    assert (
+        rejected.returncode == 2 and "stored artifact path is unsafe" in rejected.stderr
+    )
     assert sentinel.read_text() == "untouched"
     assert marker.read_text().splitlines() == ["a"]
 

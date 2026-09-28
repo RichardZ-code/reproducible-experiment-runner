@@ -19,7 +19,7 @@ from repro_runner.hashing import (
 )
 from repro_runner.paths import check_declaration
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RUN_ID = re.compile(r"[0-9a-f]{32}\Z", re.ASCII)
 DIGEST = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 TASK_ID = re.compile(r"[a-z][a-z0-9_]{0,63}\Z", re.ASCII)
@@ -41,7 +41,7 @@ class StateCommitUncertain(Exception):
     """The caller cannot establish whether a SQLite commit took effect."""
 
 
-SCHEMA = (
+SCHEMA_V1 = (
     """CREATE TABLE runs (
         run_id TEXT PRIMARY KEY,
         workflow_file TEXT NOT NULL,
@@ -136,6 +136,16 @@ SCHEMA = (
     )""",
 )
 
+PROVENANCE_TABLE = """CREATE TABLE invocation_provenance (
+    run_id TEXT NOT NULL,
+    invocation_no INTEGER NOT NULL,
+    observation_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, invocation_no),
+    FOREIGN KEY (run_id, invocation_no)
+        REFERENCES invocations(run_id, invocation_no)
+)"""
+SCHEMA_V2 = (*SCHEMA_V1, PROVENANCE_TABLE)
+
 
 def workflow_record(workflow: Workflow) -> dict[str, object]:
     return {
@@ -217,6 +227,42 @@ def _decode(value: str) -> object:
         raise InvalidState("malformed stored JSON") from error
 
 
+def _provenance_record(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "commit",
+        "dirty",
+        "availability",
+        "observed_at",
+    }:
+        raise InvalidState("stored provenance record is invalid")
+    availability = value["availability"]
+    if not isinstance(availability, str) or availability not in {
+        "available",
+        "unborn",
+        "outside_git",
+        "git_unavailable",
+        "inspection_timeout",
+        "inspection_failed",
+    }:
+        raise InvalidState("stored provenance availability is invalid")
+    if not isinstance(value["observed_at"], str) or not value["observed_at"]:
+        raise InvalidState("stored provenance observation time is invalid")
+    commit, dirty = value["commit"], value["dirty"]
+    if availability == "available":
+        if (
+            not isinstance(commit, str)
+            or not re.fullmatch(r"[0-9a-f]{16,}\Z", commit, re.ASCII)
+            or type(dirty) is not bool
+        ):
+            raise InvalidState("stored available Git observation is invalid")
+    elif availability == "unborn":
+        if commit is not None or type(dirty) is not bool:
+            raise InvalidState("stored unborn Git observation is invalid")
+    elif commit is not None or dirty is not None:
+        raise InvalidState("stored unavailable Git observation is invalid")
+    return value
+
+
 def validate_run_id(run_id: str) -> None:
     if not RUN_ID.fullmatch(run_id):
         raise InvalidState("run ID must be 32 lowercase hexadecimal characters")
@@ -292,6 +338,18 @@ class PriorResult:
     artifacts: dict[str, Artifact]
 
 
+@dataclass(frozen=True)
+class StateSnapshot:
+    schema_version: int
+    run: sqlite3.Row
+    invocations: list[sqlite3.Row]
+    tasks: list[sqlite3.Row]
+    attempts: list[sqlite3.Row]
+    artifacts: list[sqlite3.Row]
+    resolutions: list[sqlite3.Row]
+    provenance: list[sqlite3.Row]
+
+
 class StateStore:
     """Single-connection owner. Every mutation has an explicit short transaction."""
 
@@ -345,11 +403,13 @@ class StateStore:
                         raise InvalidState("new state has a nonzero schema version")
                     if connection.execute("SELECT name FROM sqlite_master").fetchone():
                         raise InvalidState("new state contains unknown objects")
-                    for statement in SCHEMA:
+                    for statement in SCHEMA_V2:
                         connection.execute(statement)
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             store = cls(connection, readonly=False)
             store.validate_schema()
+            if not new:
+                store.upgrade_v1()
             return store
         except BaseException:
             connection.close()
@@ -376,6 +436,8 @@ class StateStore:
                     raise InvalidState("SQLite full synchronization is unavailable")
             store = cls(connection, readonly=readonly)
             store.validate_schema()
+            if not readonly:
+                store.upgrade_v1()
             return store
         except sqlite3.OperationalError as error:
             connection.close()
@@ -393,7 +455,8 @@ class StateStore:
 
     def validate_schema(self) -> None:
         connection = self.connection
-        if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (1, SCHEMA_VERSION):
             raise InvalidState("unsupported state schema version")
         journal = connection.execute("PRAGMA journal_mode").fetchone()[0]
         if journal != "delete":
@@ -405,10 +468,11 @@ class StateStore:
             )
         }
         expected = {
-            statement.split("(", 1)[0].split()[-1]: statement for statement in SCHEMA
+            statement.split("(", 1)[0].split()[-1]: statement
+            for statement in (SCHEMA_V1 if version == 1 else SCHEMA_V2)
         }
         if actual != expected:
-            raise InvalidState("state tables differ from schema version 1")
+            raise InvalidState(f"state tables differ from schema version {version}")
         extras = connection.execute(
             "SELECT type,name,sql FROM sqlite_master WHERE type!='table'"
         ).fetchall()
@@ -419,6 +483,18 @@ class StateStore:
             for item in extras
         ):
             raise InvalidState("state contains unsupported schema objects")
+        self.schema_version = version
+
+    def upgrade_v1(self) -> None:
+        """Add only future invocation observations, preserving v1 history."""
+        if self.schema_version != 1:
+            return
+        if self.readonly:
+            raise InvalidState("read-only state cannot be upgraded")
+        with _transaction(self.connection, write=True):
+            self.connection.execute(PROVENANCE_TABLE)
+            self.connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        self.validate_schema()
 
     def start_run(
         self,
@@ -427,6 +503,7 @@ class StateStore:
         workers: int,
         use_cache: bool,
         environment: Mapping[str, object],
+        provenance: Mapping[str, object],
         started_at: str,
     ) -> None:
         validate_run_id(run_id)
@@ -462,6 +539,10 @@ class StateStore:
                     "running",
                     None,
                 ),
+            )
+            self.connection.execute(
+                "INSERT INTO invocation_provenance VALUES (?,?,?)",
+                (run_id, 1, _json(_provenance_record(dict(provenance)))),
             )
             self.connection.executemany(
                 "INSERT INTO tasks VALUES (?,?,?,?,?)",
@@ -516,6 +597,7 @@ class StateStore:
         run_id: str,
         workers_override: int | None,
         environment: Mapping[str, object],
+        provenance: Mapping[str, object],
         started_at: str,
     ) -> tuple[int, int, bool]:
         row = self.run_header(run_id)
@@ -559,6 +641,10 @@ class StateStore:
                     "running",
                     None,
                 ),
+            )
+            self.connection.execute(
+                "INSERT INTO invocation_provenance VALUES (?,?,?)",
+                (run_id, number, _json(_provenance_record(dict(provenance)))),
             )
             self.connection.execute(
                 "UPDATE runs SET latest_invocation=?, outcome='running', reason=NULL, updated_at=? WHERE run_id=?",
@@ -872,6 +958,48 @@ class StateStore:
                 "UPDATE runs SET outcome='interrupted',reason=? WHERE run_id=?",
                 (reason, run_id),
             )
+
+    def manifest_snapshot(self, run_id: str) -> StateSnapshot:
+        """Fetch one committed, consistent view without holding it through JSON I/O."""
+        with _transaction(self.connection, write=False):
+            run = self.run_header(run_id)
+            invocations = self.connection.execute(
+                "SELECT * FROM invocations WHERE run_id=? ORDER BY invocation_no",
+                (run_id,),
+            ).fetchall()
+            tasks = self.connection.execute(
+                "SELECT * FROM tasks WHERE run_id=? ORDER BY task_id", (run_id,)
+            ).fetchall()
+            attempts = self.connection.execute(
+                "SELECT * FROM attempts WHERE run_id=? ORDER BY task_id,attempt_no",
+                (run_id,),
+            ).fetchall()
+            artifacts = self.connection.execute(
+                "SELECT * FROM artifacts WHERE run_id=? ORDER BY task_id,attempt_no,path",
+                (run_id,),
+            ).fetchall()
+            resolutions = self.connection.execute(
+                "SELECT * FROM resolutions WHERE run_id=? ORDER BY invocation_no,task_id",
+                (run_id,),
+            ).fetchall()
+            provenance = (
+                self.connection.execute(
+                    "SELECT * FROM invocation_provenance WHERE run_id=? ORDER BY invocation_no",
+                    (run_id,),
+                ).fetchall()
+                if self.schema_version == 2
+                else []
+            )
+        return StateSnapshot(
+            self.schema_version,
+            run,
+            invocations,
+            tasks,
+            attempts,
+            artifacts,
+            resolutions,
+            provenance,
+        )
 
     def status(
         self, run_id: str

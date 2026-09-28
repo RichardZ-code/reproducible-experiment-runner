@@ -1,6 +1,7 @@
 """Owned cancellation, abrupt death, and a known late old-attempt writer."""
 
 import hashlib
+import json
 import os
 import signal
 import sqlite3
@@ -183,8 +184,16 @@ def test_interrupted_run_retains_completed_work_and_retries_new_attempt(
             "Recorded outcome: " + ("interrupted" if method == "sigint" else "running")
             in before.stdout
         )
+        manifest_path = workspace / ".repro/runs" / identity / "manifest.json"
+        before_manifest = json.loads(manifest_path.read_text())
+        assert before_manifest["run"]["outcome"] == (
+            "interrupted" if method == "sigint" else "running"
+        )
         resumed = invoke(workspace, "resume", identity)
         assert resumed.returncode == 0, resumed.stderr
+        recovered_manifest = json.loads(manifest_path.read_text())
+        assert recovered_manifest["snapshot"]["invocation_no"] == 2
+        assert recovered_manifest["run"]["outcome"] == "succeeded"
         assert f"Run ID: {identity}" in resumed.stdout
         assert "a: retained (succeeded)" in resumed.stdout
         assert "executed=2, retained=1" in resumed.stdout

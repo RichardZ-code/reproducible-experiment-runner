@@ -6,7 +6,7 @@ A local Python CLI under development for dependency-aware workflows, verified co
 
 Run and resume hold one workspace lock. A run ID remains stable across invocations, while each executed or restored attempt gets a new numbered directory and separate logs. Status and resume look for `.repro` in the current directory, so enter the workflow directory first. A P05-era attempt directory without a database cannot be resumed automatically. See the [development guide](docs/development.md) for commands and details.
 
-Recovery verifies declared inputs and outputs within a local-workspace contract. Commands are trusted and may have undeclared inputs or external side effects; they are not exactly-once operations. Abrupt parent death can leave an old child running in its private attempt directory. Manifests and the seeded example are planned for P07 and are not implemented here.
+Recovery verifies declared inputs and outputs within a local-workspace contract. Commands are trusted and may have undeclared inputs or external side effects; they are not exactly-once operations. Abrupt parent death can leave an old child running in its private attempt directory. Run and resume publish a versioned manifest from committed state and report publication failures. The [seeded five-task example](examples/simulation/README.md) exercises cache reuse and selective invalidation.
 
 - [Proposed implementation contract](docs/design.md)
 - [Design decisions and limitations](docs/design-decisions.md)

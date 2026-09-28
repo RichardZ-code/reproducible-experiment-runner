@@ -85,6 +85,8 @@ class RunResult:
     uncertain_launches: int = 0
     use_cache: bool = True
     task_order: tuple[str, ...] = ()
+    manifest_path: str | None = None
+    manifest_error: str | None = None
 
 
 def _now() -> str:

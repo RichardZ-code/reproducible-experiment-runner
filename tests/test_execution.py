@@ -300,7 +300,7 @@ def test_installed_cli_from_other_directory(tmp_path: Path) -> None:
     assert (workspace / "out/a.txt").read_text() == "a:"
     assert (workspace / ".repro/state.sqlite3").is_file()
     assert not list((workspace / ".repro").glob("cache/*"))
-    assert not list((workspace / ".repro/runs").glob("*/manifest.json"))
+    assert len(list((workspace / ".repro/runs").glob("*/manifest.json"))) == 1
     assert list(tmp_path.glob(".repro")) == []
     default = subprocess.run(
         [str(RUNNER), "run", str(path)],

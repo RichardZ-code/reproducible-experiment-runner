@@ -107,8 +107,14 @@ def _show_result(result: RunResult, signal_number: int | None, use_cache: bool) 
     )
     typer.echo(summary)
     typer.echo(f"Duration: {result.duration_seconds:.3f}s")
+    if result.manifest_path is not None:
+        typer.echo(f"Manifest: {result.manifest_path}")
+    if result.manifest_error is not None:
+        typer.echo(f"Manifest publication failed: {result.manifest_error}", err=True)
     if signal_number is not None:
         raise typer.Exit(code=128 + signal_number)
+    if result.manifest_error is not None:
+        raise typer.Exit(code=3)
     if result.state == "failed":
         raise typer.Exit(code=1)
 

@@ -107,7 +107,7 @@ Intended runtime locations:
 
 | Location relative to workspace | Purpose |
 |---|---|
-| `.repro/state.sqlite3` | State database; schema version 1 |
+| `.repro/state.sqlite3` | State database; schema version 2 after P07 writable opening |
 | `.repro/lock` | Stable lockfile used by an OS lock |
 | `.repro/cache/v1/<sha256>/metadata.json` | Complete cache metadata |
 | `.repro/cache/v1/<sha256>/files/<output-path>` | Cache artifacts |
@@ -269,14 +269,15 @@ Process-interruption safety is the target. Atomic rename publishes one filesyste
 
 ## K. SQLite, ownership, and resume
 
-Use SQLite schema version 1 via `PRAGMA user_version`, foreign keys enabled, rollback journaling (`DELETE`), and a 5-second busy timeout. Reject unsupported schema versions without automatic migration or destructive initialization. Version zero is allowed only for a newly created empty database owned by this invocation; a pre-existing unversioned database is an error. Read-only status opens an existing database using URI `mode=ro`, takes a short consistent read transaction, and does not initialize schema. A journal-recovery/write requirement is an explicit status error; execution/resume under ownership performs recovery.
+Use SQLite schema version 2 via `PRAGMA user_version`, foreign keys enabled, rollback journaling (`DELETE`), and a 5-second busy timeout. P07 adds one transactional version 1 to version 2 upgrade for invocation Git observations; earlier observations remain unknown. Reject other unsupported schema versions without destructive initialization. Version zero is allowed only for a newly created empty database owned by this invocation; a pre-existing unversioned database is an error. Read-only status opens an existing database using URI `mode=ro`, takes a short consistent read transaction, and does not initialize or upgrade schema. A journal-recovery/write requirement is an explicit status error; execution/resume under ownership performs recovery.
 
 Proposed tables, all within one workspace database:
 
 | Table | Primary key and contents |
 |---|---|
 | `runs` | `run_id`; original workflow basename, normalized JSON/hash and workflow schema, cache mode, initial workers, creation/update timestamps, latest outcome/reason |
-| `invocations` | `(run_id, invocation_no)`; initial run or resume, workers, environment and Git provenance, start/end UTC timestamps, monotonic duration, outcome, per-task resolution/source-attempt references |
+| `invocations` | `(run_id, invocation_no)`; initial run or resume, workers, environment, start/end UTC timestamps, monotonic duration, outcome |
+| `invocation_provenance` | `(run_id, invocation_no)`; Git commit, dirty flag, availability, and observation time for new P07 invocations; absent row means not collected for older history |
 | `tasks` | `(run_id, task_id)`; current state, selected/current attempt number (nullable), blocked/failure reason; references original normalized task contract |
 | `task_attempts` | `(run_id, task_id, attempt_no)`; invocation number, operation (`execute`/`restore`/`prepare`), state, logical command/resolution descriptor, canonical key record/digest, input/dependency snapshots, timing, nullable child exit code, launch state (`not_started`/`starting`/`started`), relative work/log paths, diagnostic |
 | `artifacts` | `(run_id, task_id, attempt_no, relative_path)`; output SHA-256 and size; foreign key to attempt |
@@ -314,7 +315,7 @@ The deterministic example should reproduce artifact hashes under its declared in
 
 ## M. Planned synthetic example
 
-The planned DAG is `generate -> simulate_a / simulate_b / simulate_c -> summarize`. It is not present yet. Use only standard-library numeric code and JSON; no private data, network calls, or large scientific dependency.
+The P07 DAG is `generate -> simulate_a / simulate_b / simulate_c -> summarize`. It uses only standard-library numeric code and JSON; no private data, network calls, or large scientific dependency. The [example guide](../examples/simulation/README.md) gives its executable contract.
 
 - `generate.py` reads `config/base.json` containing seed, sample count, and steps. Using a local `random.Random(seed)`, it writes integer initial states and the seed/size parameters to `out/input.json`.
 - `simulate.py` reads that input and a branch's `config/a.json`, `config/b.json`, or `config/c.json`. For every initial value, iterate the recurrence `x = (multiplier * x + increment) % modulus` for the configured number of steps, producing a deterministic numeric simulation checksum and aggregate. Each branch writes its own `out/a.json`, `out/b.json`, or `out/c.json`, including branch parameters and aggregate values.

@@ -37,7 +37,18 @@ def started(tmp_path: Path):
     runtime.mkdir()
     state = StateStore.create_or_open(runtime)
     state.start_run(
-        workflow(tmp_path), "a" * 32, 2, True, {"test": "environment"}, "start"
+        workflow(tmp_path),
+        "a" * 32,
+        2,
+        True,
+        {"test": "environment"},
+        {
+            "commit": None,
+            "dirty": None,
+            "availability": "outside_git",
+            "observed_at": "start",
+        },
+        "start",
     )
     return state
 
@@ -47,7 +58,7 @@ def test_schema_reopen_foreign_keys_and_explicit_transactions(tmp_path: Path) ->
     connection = state.connection
     assert connection.autocommit is True
     assert not connection.in_transaction
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
     assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -77,6 +88,95 @@ def test_schema_reopen_foreign_keys_and_explicit_transactions(tmp_path: Path) ->
         assert not reopened.connection.in_transaction
     finally:
         reopened.close()
+
+
+def test_v1_upgrade_preserves_records_and_unknown_provenance(tmp_path: Path) -> None:
+    state = started(tmp_path)
+    run_id = "a" * 32
+    state.finish_invocation("failed", "end", 1.0)
+    state.close()
+    path = tmp_path / ".repro/state.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE invocation_provenance")
+        connection.execute("PRAGMA user_version=1")
+    readonly = StateStore.open_existing(tmp_path / ".repro", readonly=True)
+    try:
+        assert readonly.schema_version == 1
+        assert readonly.status(run_id)[0]["outcome"] == "failed"
+    finally:
+        readonly.close()
+    upgraded = StateStore.open_existing(tmp_path / ".repro", readonly=False)
+    try:
+        assert upgraded.schema_version == 2
+        snapshot = upgraded.manifest_snapshot(run_id)
+        assert snapshot.invocations[0]["invocation_no"] == 1
+        assert snapshot.provenance == []
+        from repro_runner.manifest import build_manifest
+
+        assert (
+            build_manifest(snapshot)["invocations"][0]["git"]["availability"]
+            == "not_collected"
+        )
+        _, number, _ = upgraded.start_resume(
+            run_id,
+            None,
+            {"test": "environment"},
+            {
+                "commit": None,
+                "dirty": None,
+                "availability": "outside_git",
+                "observed_at": "resume",
+            },
+            "resume",
+        )
+        assert number == 2
+        observations = upgraded.manifest_snapshot(run_id).provenance
+        assert len(observations) == 1 and observations[0]["invocation_no"] == 2
+        assert upgraded.connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert (
+            upgraded.connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        )
+    finally:
+        upgraded.close()
+
+
+def test_failed_v1_upgrade_rolls_back_version_and_table(tmp_path: Path) -> None:
+    state = started(tmp_path)
+    state.close()
+    path = tmp_path / ".repro/state.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE invocation_provenance")
+        connection.execute("PRAGMA user_version=1")
+    connection = sqlite3.connect(path, autocommit=True)
+    connection.row_factory = sqlite3.Row
+    store = StateStore(connection, readonly=False)
+    store.validate_schema()
+
+    def deny_version(
+        action: int, name: str | None, value: str | None, *_: object
+    ) -> int:
+        if (
+            action == sqlite3.SQLITE_PRAGMA
+            and name == "user_version"
+            and value is not None
+        ):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    connection.set_authorizer(deny_version)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            store.upgrade_v1()
+    finally:
+        store.close()
+    with sqlite3.connect(path) as check:
+        assert check.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert (
+            check.execute(
+                "SELECT name FROM sqlite_master WHERE name='invocation_provenance'"
+            ).fetchone()
+            is None
+        )
 
 
 def test_success_artifacts_and_selection_rollback_as_one_unit(tmp_path: Path) -> None:
@@ -154,7 +254,7 @@ def test_existing_unversioned_and_unsupported_schema_rejected(tmp_path: Path) ->
     state = StateStore.create_or_open(runtime)
     state.close()
     with sqlite3.connect(path) as connection:
-        connection.execute("PRAGMA user_version=2")
+        connection.execute("PRAGMA user_version=3")
     with pytest.raises(InvalidState, match="unsupported state schema"):
         StateStore.open_existing(runtime, readonly=True)
 

@@ -22,8 +22,10 @@ from repro_runner.executor import (
     retain_task,
 )
 from repro_runner.hashing import environment_record
+from repro_runner.manifest import write_manifest
 from repro_runner.ownership import workspace_lock
 from repro_runner.paths import ensure_real_directory
+from repro_runner.provenance import observe_git
 from repro_runner.state import (
     StateCommitUncertain,
     StateStore,
@@ -154,12 +156,19 @@ async def run_workflow(
         raise ValueError("workers must be at least 1")
     with workspace_lock(workflow.workspace) as runtime:
         environment = await environment_record()
+        provenance = observe_git(workflow.workspace).record()
         state = StateStore.create_or_open(runtime)
         try:
             run_id = uuid.uuid4().hex
             started_at = _now()
             state.start_run(
-                workflow, run_id, workers, use_cache, environment, started_at
+                workflow,
+                run_id,
+                workers,
+                use_cache,
+                environment,
+                provenance,
+                started_at,
             )
             return await _invoke(
                 workflow,
@@ -193,9 +202,10 @@ async def resume_workflow(
             workflow = load_workflow(workspace / header["workflow_file"])
             state.verify_workflow(run_id, workflow)
             environment = await environment_record()
+            provenance = observe_git(workspace).record()
             started_at = _now()
             _, workers, use_cache = state.start_resume(
-                run_id, workers_override, environment, started_at
+                run_id, workers_override, environment, provenance, started_at
             )
             return await _invoke(
                 workflow,
@@ -229,6 +239,7 @@ async def _invoke(
     resume_mode: bool,
 ) -> RunResult:
     started = time.monotonic()
+    finalized = False
     try:
         if environment["dependency_lock_sha256"] is None:
             print(
@@ -242,6 +253,7 @@ async def _invoke(
             ensure_real_directory(run_dir)
         else:
             run_dir.mkdir()
+        write_manifest(state, run_dir)
         print(
             f"Run ID: {run_id}\nInvocation: {state.invocation_no}\n"
             f"Workflow: {workflow.filename}\nLogs: .repro/runs/{run_id}/attempts"
@@ -260,6 +272,15 @@ async def _invoke(
         ended_at = _now()
         duration = time.monotonic() - started
         state.finish_invocation(outcome, ended_at, duration)
+        finalized = True
+        manifest_path: str | None = None
+        manifest_error: str | None = None
+        try:
+            manifest_path = str(
+                write_manifest(state, run_dir).relative_to(workflow.workspace)
+            )
+        except (OSError, ValidationError) as error:
+            manifest_error = f"{type(error).__name__}: {error}"
         return RunResult(
             run_id,
             outcome,
@@ -271,9 +292,11 @@ async def _invoke(
             state.uncertain_launches(),
             use_cache,
             workflow.graph.order,
+            manifest_path,
+            manifest_error,
         )
     except BaseException as error:
-        if not isinstance(error, StateCommitUncertain):
+        if not finalized and not isinstance(error, StateCommitUncertain):
             try:
                 state.abort_invocation(
                     f"infrastructure interruption: {type(error).__name__}"
