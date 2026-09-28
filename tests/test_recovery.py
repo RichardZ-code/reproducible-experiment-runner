@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import os
 import sqlite3
 import subprocess
@@ -471,3 +472,58 @@ def test_corrupt_cache_during_resume_is_quarantined_and_recomputed(
                 (identity,),
             )
         ] == [(1, "succeeded"), (2, "succeeded")]
+
+
+def test_resume_repairs_corrupt_cache_without_reexecuting_unrelated_branch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = tmp_path / "launches"
+    script(workspace, marker)
+    path = workflow(workspace, {"a": task("a"), "b": task("b")})
+    first = cli(tmp_path, "run", str(path))
+    assert first.returncode == 0, first.stderr
+    identity = run_id(first)
+    with closing(db(workspace)) as connection:
+        key = connection.execute(
+            "SELECT key FROM attempts WHERE run_id=? AND task_id='a'",
+            (identity,),
+        ).fetchone()[0]
+    entry = workspace / ".repro/cache/v1" / key
+    artifact = entry / "files/out/a.txt"
+    assert artifact.read_bytes() == b"a:"
+    artifact.write_bytes(b"x:")  # Same size, different digest.
+    (workspace / "out/a.txt").unlink()
+
+    resumed = cli(workspace, "resume", identity)
+    assert resumed.returncode == 0, resumed.stderr
+    assert "executed=1, retained=1, cached=0" in resumed.stdout
+    assert "a: succeeded" in resumed.stdout
+    assert "b: retained (succeeded)" in resumed.stdout
+    assert marker.read_text().splitlines().count("a") == 2
+    assert marker.read_text().splitlines().count("b") == 1
+    assert len(list(entry.parent.glob(f".bad-{key}-*"))) == 1
+    assert artifact.read_bytes() == (workspace / "out/a.txt").read_bytes() == b"a:"
+    assert sha(artifact) == hashlib.sha256(b"a:").hexdigest()
+    with closing(db(workspace)) as connection:
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT task_id,attempt_no,state FROM attempts WHERE run_id=? ORDER BY task_id,attempt_no",
+                (identity,),
+            )
+        ] == [("a", 1, "succeeded"), ("a", 2, "succeeded"), ("b", 1, "succeeded")]
+    manifest = json.loads(
+        (workspace / ".repro/runs" / identity / "manifest.json").read_text()
+    )
+    resolutions = manifest["invocations"][1]["resolutions"]
+    assert resolutions["a"]["disposition"] == "executed"
+    assert resolutions["b"]["disposition"] == "retained"
+    assert resolutions["b"]["selected_attempt_no"] == 1
+
+    warm = cli(workspace, "run", "workflow.yaml")
+    assert warm.returncode == 0, warm.stderr
+    assert "executed=0, retained=0, cached=2" in warm.stdout
+    assert marker.read_text().splitlines().count("a") == 2
+    assert marker.read_text().splitlines().count("b") == 1

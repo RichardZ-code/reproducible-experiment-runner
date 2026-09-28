@@ -75,3 +75,24 @@ For a first lock generation, install `pip-tools` in `.venv` before compiling; la
 Locally verified in P02: macOS Python 3.12 environment, macOS lock resolution and installation, editable package/entry point, CLI help and unavailable behavior, smoke tests, and Ruff. A second fresh temporary macOS environment passed the documented install and check sequence without an import link. Linux resolution, Linux behavior, hosted CI, and clean wheel/source-distribution installation remain future gates.
 
 P03 locally verified `runner validate` from another directory using the installed entry point, plus schema, graph, path, ownership, glob, and input-readiness tests. These checks do not establish task execution.
+
+## Preliminary clean-wheel check
+
+P08 built a wheel with the installed, declared build tools and installed it into a separate temporary Python 3.12 environment. This checks the wheel independently of the editable source installation. It does not replace P10's source-distribution or hosted-platform checks. To repeat it without copying development packages or state:
+
+```sh
+BASE_PYTHON=$(.venv/bin/python -c 'import sys; print(sys._base_executable)')
+WHEEL_CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/repro-wheel.XXXXXX")
+.venv/bin/python -m build --wheel --no-isolation --outdir "$WHEEL_CHECK_DIR/dist"
+"$BASE_PYTHON" -m venv "$WHEEL_CHECK_DIR/runtime"
+"$WHEEL_CHECK_DIR/runtime/bin/python" -m pip install --no-cache-dir "$WHEEL_CHECK_DIR"/dist/*.whl
+mkdir -p "$WHEEL_CHECK_DIR/workspace/config"
+cp examples/simulation/workflow.yaml examples/simulation/*.py "$WHEEL_CHECK_DIR/workspace/"
+cp examples/simulation/config/*.json "$WHEEL_CHECK_DIR/workspace/config/"
+cd "$WHEEL_CHECK_DIR/workspace"
+env -u PYTHONPATH "$WHEEL_CHECK_DIR/runtime/bin/runner" validate workflow.yaml
+env -u PYTHONPATH "$WHEEL_CHECK_DIR/runtime/bin/runner" run workflow.yaml
+env -u PYTHONPATH "$WHEEL_CHECK_DIR/runtime/bin/runner" run workflow.yaml
+```
+
+Use the cold run's printed ID for `status RUN_ID` and `resume RUN_ID` from that temporary workspace. Confirm the module origin with `"$WHEEL_CHECK_DIR/runtime/bin/python" -c 'import repro_runner; print(repro_runner.__file__)'`; it must be under the temporary environment's site-packages. This procedure intentionally copies the example source because it is not included in the wheel. P08's observed versions, artifact hash and outcomes are in [verification](verification.md).
