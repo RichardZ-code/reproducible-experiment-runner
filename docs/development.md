@@ -15,6 +15,19 @@ For an isolated fresh-install check, create a temporary `.venv` with the same ve
 
 On Linux, use `requirements/dev-linux.lock` after that lock has been resolved and verified on Linux. The lock installs runtime, development, and build dependencies first. The editable install then builds with those installed tools and avoids a second dependency resolution. It verifies the source checkout's entry point, not a separately built wheel.
 
+P10 uses the same four commands at the top of this document on each platform, substituting `requirements/dev-linux.lock` on Linux. That lock was generated and inspected from a hosted Linux candidate, but its installation and test suite on Linux remain pending the final matrix. After installing, verify `.venv/bin/python -m pip check`, `.venv/bin/python -m ruff check .`, `.venv/bin/python -m ruff format --check .`, and `.venv/bin/python -m pytest`.
+
+To build and check both consumer installation paths, run the following from the repository root with a fresh temporary output directory. Replace `DIST_DIR` and `REPORT_DIR` with paths outside the checkout. The build uses the already installed locked backend and runs the normal source-archive-then-wheel sequence. Each checker invocation creates a new independent runtime and workspace, installs dependencies normally, and retains small logs under its report directory.
+
+```sh
+.venv/bin/python -m build --no-isolation --outdir DIST_DIR
+.venv/bin/python scripts/check_installation.py --artifact DIST_DIR/reproducible_experiment_runner-0.1.0-py3-none-any.whl --python .venv/bin/python --example examples/simulation --report-dir REPORT_DIR/wheel
+.venv/bin/python scripts/check_installation.py --artifact DIST_DIR/reproducible_experiment_runner-0.1.0.tar.gz --python .venv/bin/python --example examples/simulation --report-dir REPORT_DIR/sdist
+.venv/bin/python benchmarks/run_benchmark.py --suite compute --smoke --output-dir REPORT_DIR/benchmark
+```
+
+Use one newly created `DIST_DIR` per build and confirm it contains exactly one wheel and one source archive. The benchmark output directory must not already exist. The clean-install probes need package-index access for consumer runtime dependencies and isolated source builds. They do not inherit the development lock or the editable-import repair.
+
 On the initial Codex macOS checkout, files inside the ignored project `.venv` received the macOS `hidden` flag. Python skips a hidden editable-install `.pth` file, so the install could report success while `runner` failed to import `repro_runner`. A fresh temporary macOS environment installed and imported the package normally without a link. If this specific issue recurs in a project-local `.venv`, confirm it with `ls -lO .venv/lib/python3.12/site-packages/*.pth` and `.venv/bin/python -v -c 'import repro_runner'`. Only when Python reports `Skipping hidden .pth file`, run this from the repository root:
 
 ```sh
@@ -70,9 +83,9 @@ Regenerate the macOS lock only when intentionally reviewing dependency changes. 
 .venv/bin/python -m pip check
 ```
 
-For a first lock generation, install `pip-tools` in `.venv` before compiling; later runs use its recorded pin. Re-run tests and Ruff after a refresh, review the lock diff and generated provenance, and record the resolver and Python versions. Generate the Linux lock with the same command and `requirements/dev-linux.lock` on Linux. Do not copy or rename the macOS resolution as Linux evidence. The lock includes build requirements; development package builds use `.venv/bin/python -m build --no-isolation` once distribution verification is in scope.
+For a first lock generation, install `pip-tools` in `.venv` before compiling; later runs use its recorded pin. Re-run tests and Ruff after a refresh, review the lock diff and generated provenance, and record the resolver and Python versions. Generate the Linux lock with the same command and `requirements/dev-linux.lock` on Linux. Do not copy or rename the macOS resolution as Linux evidence. The lock includes build requirements; development package builds use `.venv/bin/python -m build --no-isolation` once distribution verification is in scope. P10's temporary Linux generator produced the reviewed candidate recorded in [CI verification](ci.md); normal CI installs the checked-in lock rather than regenerating it.
 
-Locally verified in P02: macOS Python 3.12 environment, macOS lock resolution and installation, editable package/entry point, CLI help and unavailable behavior, smoke tests, and Ruff. A second fresh temporary macOS environment passed the documented install and check sequence without an import link. Linux resolution, Linux behavior, hosted CI, and clean wheel/source-distribution installation remain future gates.
+Locally verified in P02: macOS Python 3.12 environment, macOS lock resolution and installation, editable package/entry point, CLI help and unavailable behavior, smoke tests, and Ruff. A second fresh temporary macOS environment passed the documented install and check sequence without an import link. P10 separately verified fresh wheel and source-distribution installations on local macOS and generated the Linux lock candidate on a hosted Linux runner. Linux installation, Linux behavior, and the final hosted matrix remain pending gates.
 
 P03 locally verified `runner validate` from another directory using the installed entry point, plus schema, graph, path, ownership, glob, and input-readiness tests. These checks do not establish task execution.
 

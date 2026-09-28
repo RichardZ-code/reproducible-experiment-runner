@@ -12,18 +12,37 @@ Workflow validation, local concurrent execution, verified content caching, SQLit
 | P05: Content cache | Present at P06 starting commit `066325d` | Stable identity, verified storage/restore, invalidation and corruption checks | P05 handoff reported 180 local tests and six installed-CLI demonstrations; 180 baseline tests reran successfully before P06 edits | Local commit observed; independent audit and remote push unverified |
 | P06: State and recovery | Present at P07 starting commit `517f5d3` | Durable attempts, ownership tests, safe resume with/without cache | Supplied P06 report: 214 local tests and six installed-CLI demonstrations | Local commit observed; independent audit and remote push unverified |
 | P07: Example and manifests | Present at P08 starting commit `85c8564` | Seeded DAG and accurate versioned provenance | User-reported Terminal runs outside Codex: 232 passed twice in default order; intermittent Codex `killpg` `EPERM` remains documented | Local commit observed; remote publication unverified |
-| P08: Test the complete runner | Ready for review | Adversarial behavior matrix, demonstrations and scoped fixes | Two final default-order runs passed 233/233; clean wheel and three CLI checks passed; focused runs had 19 passes, then 18 plus intermittent Codex `EPERM`, then 19 passes with scoped permission | Unstaged and uncommitted; no push |
-| P09: Run real benchmarks | Ready for review | Reproducible harness, five measured repetitions per condition, raw data and recomputed summaries | Scoped macOS batch completed all four suites; 65 valid measured samples, independent arithmetic and byte-identical summary regeneration; 249 default-order tests passed | Unstaged and uncommitted; no push |
-| P10: GitHub Actions and installation | Not started | Linux/macOS hosted CI plus clean wheel/sdist installation | Pending | Not reviewed or published |
+| P08: Test the complete runner | Present at P10 starting commit `9a5c52a` | Adversarial behavior matrix, demonstrations and scoped fixes | Two final default-order runs passed 233/233; clean wheel and three CLI checks passed; focused runs had 19 passes, then 18 plus intermittent Codex `EPERM`, then 19 passes with scoped permission | Local commit observed; remote publication unverified |
+| P09: Run real benchmarks | Present at P10 starting commit `9a5c52a` | Reproducible harness, five measured repetitions per condition, raw data and recomputed summaries | Scoped macOS batch completed all four suites; 65 valid measured samples, independent arithmetic and byte-identical summary regeneration; 249 default-order tests passed | Local commit observed; remote publication unverified |
+| P10: GitHub Actions and installation | Linux lock candidate verified locally; final matrix pending review | Linux/macOS hosted CI plus clean wheel/sdist installation | Local Mac evidence and successful Linux generator below; hosted matrix checks pending | Generator published and dispatched by user; final changes uncommitted |
 | P11: README and demo | Not started | Tested quick start, real demo and evidence-backed claims | Pending | Not reviewed or published |
 | P12: Final audit | Not started | Read-only audit and resolved advertised-feature defects | Pending | Not reviewed or published |
 | P13: Release | Not started | Reviewed artifacts/revision, CI, authorized release and public access checks | Pending | Not reviewed or published |
+
+## P10 checkpoint
+
+| Gate | Status |
+|---|---|
+| Local implementation | CI matrix, artifact-verified Linux lock, clean-install checker, focused tests, and scoped docs prepared locally; temporary generator deletion prepared |
+| Local verification | Baseline 249 passed; default-order suite 253 passed three times before bootstrap and once after (31.76 seconds); focused helper tests 4 passed; Ruff lint/format, pip check, and diff whitespace passed; post-bootstrap compute smoke yielded four passing smoke records with five task launches and matching hashes; fresh macOS wheel and sdist consumer probes passed again |
+| Linux lock generation | User-dispatched run `36393182066` succeeded at `1984b08f382890678c8f3f25a71a62308a62f181`; ZIP, provenance, pyproject digest, candidate hash, and pin inventory checked; candidate copied locally without editing |
+| User review and publication authorization | Bootstrap generator authorized and published by user; final matrix/lock/helper/docs review pending |
+| Actual commit and push | Bootstrap generator commit/push observed at `1984b08f382890678c8f3f25a71a62308a62f181`; final P10 changes uncommitted and unpushed |
+| Hosted Linux result | Pending |
+| Hosted macOS result | Pending |
+| Final acceptance | Pending both required jobs on the intended reviewed commit |
+
+The local P10 review build used the `9a5c52a` source checkout with the P10 documentation/helper/test/workflow changes uncommitted. It built the source archive first, then the wheel from that archive. The wheel SHA-256 was `44af69e6a262aa3095a81ddf43981202e4030a2eb45f75cfb178ec2479581127`; the source archive SHA-256 was `9a584fbbb2bacea4a718a4b77e09786c9a9408a450b78ba8ea2a0f8276b1f9a8`. Both probes installed normal dependencies in separate temporary environments and checked the five-task example, metadata, provenance, output hashes, SQLite, completed-run resume, and manifest reconstruction. Their passing results are local macOS evidence only.
+
+At starting HEAD `9a5c52a`, the required pyproject and package sources were already tracked. The user published only the temporary generator workflow, producing commit `1984b08f382890678c8f3f25a71a62308a62f181`, and dispatched [run `36393182066`](https://github.com/RichardZ-code/reproducible-experiment-runner/actions/runs/36393182066) on `main`. The run reported success in 33 seconds and uploaded one seven-day candidate artifact. The downloaded ZIP SHA-256 matched GitHub's displayed digest `5638af4f81ce7be57c47c0d4f1ac29597610f80d292d3c2c6265de0e06b5b5a6`. Its only files were `requirements/dev-linux.lock` and `reports/linux-lock-provenance.json`. The provenance identified the run commit, the matching local pyproject digest, Linux x86_64, Python 3.12.14, pip-tools 7.6.1, and candidate SHA-256 `1d7bd350d65ade6846486df46fef7a763a248e67f42258817bed009b9350cc86`. All 20 package pins match the macOS lock. This is generation evidence, not a locked Linux install or CI pass. The generator deletion, Linux lock, and final matrix are prepared locally for review.
+
+The post-bootstrap local build at `1984b08f382890678c8f3f25a71a62308a62f181` with pending P10 changes produced wheel SHA-256 `c8f57e100e8a887363e2c284c2cf338cfb5d5a41db1836fc5a9daccabb63f4f6` and source-archive SHA-256 `3f2e0ca0edc242957a97db047e052656c28ca49a123b3b30b2f61ff8e427d225`. Both newly built artifacts passed the separate clean-runtime checks on local macOS. These are local artifact identities, not hosted output hashes or byte-identical cross-platform claims.
 
 ## Setup carried forward
 
 Python 3.12 is the baseline. P00 verified a compatible bundled interpreter, required standard-library imports, SQLite, pip, and ensurepip. The older system Python is not the baseline. P02 used the separately verified Python 3.12.14 interpreter to create `.venv`; its location remains session context, not portable project configuration. The project environment passed the standard-library and SQLite checks and installs the local package and locked dependencies.
 
-GitHub Desktop remains the reviewed commit/push route. Direct CLI push is not configured, and successful Desktop push has not yet been demonstrated. These are access limitations, not evidence of an application defect. No authentication/install work is part of P01.
+GitHub Desktop remains the reviewed commit/push route. Direct CLI push is not configured. The user completed the P10 bootstrap push at `1984b08f382890678c8f3f25a71a62308a62f181`, verified by the hosted run on that commit. No authentication/install work was part of P01.
 
 ## Design clarifications to review
 
