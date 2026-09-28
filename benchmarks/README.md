@@ -1,0 +1,58 @@
+# P09 benchmark protocol
+
+Protocol version 1 measures the installed local CLI on one macOS host. The controller is `run_benchmark.py`; it creates disposable workspaces outside the Git checkout, then saves only selected metadata, JSON Lines observations, and generated Markdown tables under `benchmarks/results/`. The results are correctness checked timing observations, not service-level promises. P09 does not change the runner.
+
+## Fixed conditions before formal collection
+
+| Suite | Workload | Conditions | Warm-up and measured trials |
+| --- | --- | --- | --- |
+| A: scheduling | 24 independent tasks, each requesting a 0.25 second wait and writing one deterministic file | `--no-cache`; workers 1, 2, 4, 8 | One excluded warm-up per worker count, then five measured runs per count. Each repetition block rotates the worker order: 1/2/4/8, 2/4/8/1, 4/8/1/2, 8/1/2/4, 1/2/4/8. |
+| B: computation | The repository's five-task integer-recurrence example with seed 1729 and unchanged branch configurations | `--no-cache`; workers 1 and 4; `sample_count=5000`, `steps=1000`, or 5,000,000 recurrence updates per branch, selected after the bounded serial sizing pilot | One excluded warm-up per count, then five measured runs per count. Block order alternates 1/4 and 4/1. |
+| C: cache | The same five-task profile as B, workers 4 | Five independent fresh-workspace cycles: cold, unchanged warm, then only branch-b `increment` changed from its verified initial 5 to 6 | One excluded full cycle, then five measured cycles. Stages always run in that order. A separate no-cache changed-input reference checks the changed result. |
+| D: recovery | Three deterministic tasks in a chain, with `a` committed before `b` is interrupted | Boundary `active_child` uses SIGINT while `b` is running; boundary `after_publication` uses SIGKILL after `b`'s complete publication and child exit but before SQLite success. Both cache enabled and disabled. | One excluded dry run per boundary/cache-mode condition, then five measured trials per condition. Only the installed CLI resume invocation is timed. |
+
+The default formal repetition count is five. Smoke mode uses two small trials per condition, a 0.02 second wait fixture and a 32-by-20 example; all its records are labeled `smoke` and cannot produce a formal P09 summary. No timing result is excluded because it is slow. A nonzero unexpected exit, timeout, incomplete state, count mismatch, or output mismatch invalidates that trial and stops its cohort after saving failure evidence. A valid planned interruption in D is part of its condition. A corrected harness or changed engine/workload starts a new identified batch for affected cohorts; failed or superseded records remain visible.
+
+Each ordinary interval begins immediately before launching `.venv/bin/runner` and ends after that process exits. It includes CLI startup, validation, hashing, task work or restoration, output checks, SQLite, Git observation, manifest publication, and normal cleanup. Workspace preparation, controller assertions, independent SHA-256 hashing, summary generation, deliberate downtime, and recovery fixture cleanup are outside the clock. D measures the real `runner resume` interval only. The first D boundary launches the ordinary CLI; the second uses a benchmark-owned wrapper to pause at a real `StateStore.record_result` boundary before its unmodified installed-CLI resume. Timing uses integer `perf_counter_ns` values; summaries convert to seconds without early rounding. CLI output is captured in temporary files.
+
+The controller runs measured invocations sequentially. Each A/B invocation uses a new workspace; C intentionally shares one workspace only within each triple; D shares one workspace only across its initial run and resume. All new C cold stages begin with an empty application cache. Operating-system and hardware caches are not cleared. A's waiting tasks provide scheduling/overlap evidence, not CPU speedup. B has three parallel recurrence branches plus serial generate and summarize stages. D is primarily a recovery-correctness investigation; its resume times are descriptive, not a pure comparison with a from-scratch run.
+
+For every successful invocation the controller checks the actual run/invocation IDs, SQLite outcome and current-invocation resolutions, confirmed child launches, task inventory, complete manifest, and independently hashed declared outputs against committed artifacts. A also parses child start/end events to observe overlap and maximum active children. B/C check deterministic hashes and the real summary arithmetic. C records cache lookup eligibility from stored resolution evidence and derives misses only for fully successful fresh runs. `--no-cache` hit rate is not applicable. D checks pre-interruption durable rows, attempt numbering, retained/restored/executed dispositions, known fixture-child cleanup, and final hashes against an uninterrupted reference.
+
+The batch metadata records the Git revision and dirty flag separately from the copied workspaces' `outside_git` manifest observation. Its aggregate fingerprint covers the runner source, benchmark code/fixtures, example scripts/config/workflow, `pyproject.toml`, and macOS lock, including untracked benchmark files. It excludes results and generated documentation. The controller rechecks this fingerprint after measurement. Machine fields are collected with narrow read-only queries and null with a reason when unavailable. The user confirmed the Mac can stay plugged in, awake, and free of heavy unrelated jobs; the controller does not independently establish power, temperature, or background load.
+
+## Reproduction and analysis
+
+From the repository root with the documented Python 3.12 editable environment:
+
+```sh
+.venv/bin/python benchmarks/run_benchmark.py --help
+.venv/bin/python benchmarks/run_benchmark.py --suite all --repetitions 5 --sample-count 5000 --steps 1000 --output-dir benchmarks/results/BATCH_ID
+.venv/bin/python benchmarks/run_benchmark.py --summarize-only benchmarks/results/BATCH_ID
+.venv/bin/python benchmarks/run_benchmark.py --suite all --smoke --output-dir /tmp/repro-benchmark-smoke
+.venv/bin/python benchmarks/run_benchmark.py --pilot --output-dir /tmp/repro-benchmark-pilot
+```
+
+Replace `BATCH_ID` with a new directory name. A result directory must not already exist for collection; summarize-only reads an existing batch and launches no runner or task. `--permission-context` records the execution permission context as `workspace-sandbox` (default) or `scoped-process-control`; it does not itself grant permission. The final run used the latter label and a separately approved scoped command. `--summary-output` lets summarize-only write a separate comparison file.
+
+The generated `summary.md` computes A throughput as `24 / median_wall_seconds` and speedup as `median_one_worker / median_worker_N`. B reports the one-versus-four median ratio without assuming improvement. C reports `100 * (median_cold - median_warm) / median_cold`, separately from each pair's reduction, and hit rate as verified hits divided by cache-eligible tasks examined. D reports median/min/max resume time only with five valid trials per condition, plus actual count ranges. Raw nanoseconds, sample IDs, dispositions, output hashes, and exclusions remain in `samples.jsonl`. `metadata.json` fixes the measured code and environment. `summary.md` is generated from validated raw data, never hand-edited.
+
+Linux timing, cross-machine speed comparisons, operating-system cache behavior, and general production throughput are not established by this campaign. P10's hosted CI and distribution checks remain separate.
+
+## P09 observed batches
+
+The three serial sizing pilots were 0.367 s for 1000 samples and 500 steps, 0.588 s for 3000 and 1000, and 0.772 s for 5000 and 1000. Their labeled [pilot records](results/pilot-20260928/samples.jsonl) were excluded from all final comparisons. The selected profile keeps generated JSON small and performs 5,000,000 real recurrence updates in each of three branches. The workload was frozen before the formal comparisons.
+
+The final coherent result is [the scoped batch summary](results/mac-arm64-20260928-p09-scoped/summary.md), generated from its [raw observations](results/mac-arm64-20260928-p09-scoped/samples.jsonl) and [metadata](results/mac-arm64-20260928-p09-scoped/metadata.json). The exact collection command was:
+
+```sh
+.venv/bin/python benchmarks/run_benchmark.py --suite all --repetitions 5 --sample-count 5000 --steps 1000 --permission-context scoped-process-control --output-dir benchmarks/results/mac-arm64-20260928-p09-scoped
+```
+
+That command was granted scoped process-control permission in this Codex run. It is not a request to disable restrictions for future runs. The batch records commit `7f50175bd7056a5fa6780c0eb91487badad33da1`, dirty state, and measured source fingerprint `e153d4bdcfd881d7682cc039aa280b660671b52bca2b260e81931b8ccd57c7b8`. The machine query returned Apple M3, eight reported logical and eight physical cores, and 16 GiB memory; allowed CPU count was not established. The user confirmed they could maintain plugged-in, awake, low-load conditions. Power, temperature, and background load were not independently measured. The controller did not clear OS caches.
+
+The final batch has five valid measured trials per timing condition, 65 total, plus 13 labeled warm-ups and two references. An independent raw-data check reproduced the medians and ratios. For example, `C-1-cold` took 402,887,875 ns and `C-1-warm` took 183,825,541 ns, a 54.3730% reduction for that pair. The reduction from the two five-trial medians, 449,015,125 and 183,825,541 ns, is 59.0603%. These differ because the median cold and warm observations need not be the same pair. Summarize-only generated a byte-identical report in a separate temporary file, and all 27 source inventory hashes still matched the recorded aggregate fingerprint after collection.
+
+Across five cache pairs, all 25 cold eligible lookups missed, all 25 warm eligible lookups hit, and 15 of 25 changed-input lookups hit. The corresponding 25, 0, and 10 misses are derived from complete successful resolution records, not a separate native cache-miss counter. No-cache runs have no applicable cache-hit denominator.
+
+The preserved [first batch](results/mac-arm64-20260928-p09/samples.jsonl) collected all trials but its summary validator wrongly required globally unique order indices, even though order restarts for each suite. The [second batch](results/mac-arm64-20260928-p09-v2/samples.jsonl) stopped at a fixture readiness-marker race. A single orphaned fixture child from that failed trial was identified by its exact command and group, sent TERM, and verified gone. The [third batch](results/mac-arm64-20260928-p09-v3/samples.jsonl) completed while that orphan existed and was superseded after the fixture cleanup and controller failure records were improved. The [fourth batch](results/mac-arm64-20260928-p09-v4/samples.jsonl) stopped when one sandboxed active-child SIGINT trial exited 3 instead of 130. Its stderr was not captured in that record, so the cause of that occurrence is unresolved. The historical intermittent Codex `EPERM` remains documented separately in [P08 verification](../docs/verification.md); no test or production process cleanup was weakened. All four earlier batches are excluded from the final tables. No failed or unusually slow valid sample was silently discarded.

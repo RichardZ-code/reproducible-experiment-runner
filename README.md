@@ -12,3 +12,4 @@ Recovery verifies declared inputs and outputs within a local-workspace contract.
 - [Design decisions and limitations](docs/design-decisions.md)
 - [Phase progress and acceptance gates](docs/progress.md)
 - [Development setup](docs/development.md)
+- [P09 benchmark protocol and measured evidence](benchmarks/README.md)

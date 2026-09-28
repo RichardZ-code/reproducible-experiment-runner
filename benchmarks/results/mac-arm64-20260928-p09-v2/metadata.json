@@ -1,0 +1,72 @@
+{
+  "environment": {
+    "allowed_cpu_count": null,
+    "allowed_cpu_reason": "not established",
+    "architecture": "arm64",
+    "cpu_model": null,
+    "lock_sha256": "a8c1b00b30a0eeb346cd8bec55c5e12a13db20ec36f8c952f48702d4a6f3a3b8",
+    "logical_cpu_reported": 8,
+    "memory_bytes": null,
+    "os": "macOS-26.6.2-arm64-arm-64bit",
+    "permission_context": "Codex workspace sandbox; no escalation requested at collection start",
+    "physical_cpu": null,
+    "power_and_load": "User confirmed plugged in, awake, and no heavy unrelated jobs; not independently observed",
+    "python": "3.12.14",
+    "python_implementation": "CPython",
+    "pyyaml": "6.0.3",
+    "sqlite": "3.53.1",
+    "typer": "0.27.2"
+  },
+  "git_dirty": true,
+  "git_revision": "7f50175bd7056a5fa6780c0eb91487badad33da1",
+  "installation": "project .venv editable (verified by package location before collection)",
+  "mode": "formal",
+  "ordinary_command": "$RUNNER run $WORKSPACE/workflow.yaml --workers N [--no-cache]",
+  "package_version": "0.1.0",
+  "profile": {
+    "sample_count": 5000,
+    "steps": 1000
+  },
+  "protocol_version": 1,
+  "recovery_resume_command": "$RUNNER resume RUN_ID",
+  "repetitions": 5,
+  "source": {
+    "aggregate_sha256": "08af901232ae1eaa5a3339d01b6060bb3b70d2fba3a4257688ae494e781ff6f9",
+    "files": {
+      "benchmarks/fixtures/recovery_task.py": "6f4a5bdee316e1197761ab5df08370881aa1d9cedfb724abe89e84d46208baee",
+      "benchmarks/fixtures/wait_task.py": "558a279fed0d9e2f71fea4a3bda4f71d2058fae343eaa0372deeb46458f7e599",
+      "benchmarks/run_benchmark.py": "7a8f595dfd27df3bddfa846fa03bb629e5796f930e4680a750993bb370efe5f2",
+      "examples/simulation/config/a.json": "82dcf2d9bd46dd837a73a8b717cbe53400a26c2cbf44e5d13c850389dce3f14f",
+      "examples/simulation/config/b.json": "0993a27a47f116f62abce7d8e0fae5b445a55b51d2762d917a4739024580e7cc",
+      "examples/simulation/config/base.json": "32ced693de54ff5142af4dc29852fffcea94949a0385823923d49e77f08edbc4",
+      "examples/simulation/config/c.json": "8207f379da197da69b957f8c6e3e394f37c26201b9561f51b9a9a05f72204f52",
+      "examples/simulation/generate.py": "0809a90dd4ffda5610bfac56a57c9dfee1346304e4fd85946d1cd8986ab3c1d7",
+      "examples/simulation/simulate.py": "4f9b81f5b02683ad726122d8f6a2c8180aa0b7a8feb294ecc7b36b7df4ee054b",
+      "examples/simulation/summarize.py": "1d24dd1093e31fe9604fc6ed693e5b9cc06426f65c18cd44150081932cdc7e7f",
+      "examples/simulation/workflow.yaml": "742fc4f1754bb323d8ee27fda919570bbdb4bf5a4ddaa39123c0b38cbdf664f0",
+      "pyproject.toml": "50c614269b208e5cecaeb7b5ea3fbeef432e4ecb805ff521a478bb1fbb6809a6",
+      "requirements/dev-macos.lock": "a8c1b00b30a0eeb346cd8bec55c5e12a13db20ec36f8c952f48702d4a6f3a3b8",
+      "src/repro_runner/__init__.py": "d4ebb71c3afbc2df05be3d2fd5437fa1755bc3adafdc7a24e50b5844a3f73623",
+      "src/repro_runner/cache.py": "249352f088d5746456f8a74b7ee31ad0e6c84a1491a8f1c1e6771c16811bd949",
+      "src/repro_runner/cli.py": "ab5ba59a99ce2f102903e0c258c5f930e9254cdbb8a1fc89fe225c8b46383187",
+      "src/repro_runner/config.py": "a3e977c9ccb9088ed7398c7a07b5b46a96f8ae25499e514cc36d1f0a7ab64df6",
+      "src/repro_runner/errors.py": "d028b477c9dab68ce7f5f2f02eafc8aa322eb99ac53f82bfc13cd880aa62061b",
+      "src/repro_runner/executor.py": "d7d74ac26f9eb76e88faacd49fc2669a543eab8b0f135d551e235618c358540b",
+      "src/repro_runner/graph.py": "0ae482901fa5836a3e99a78d91f2d508c32fd8685897aaca678d8752eb143947",
+      "src/repro_runner/hashing.py": "7b252c9021ed38959c9080a887c69dda1a3dc89e356949dbcdb7bb8193fc1b96",
+      "src/repro_runner/manifest.py": "d117e6a10a239ab6045637877daac7aa43061bf27781154e961fffaa37c1961d",
+      "src/repro_runner/ownership.py": "0983e59263be61602607395b19e9c0dd5345acbbc6fb216b534decd491f69995",
+      "src/repro_runner/paths.py": "67942feec30ae53e569cd0b3e34fcf7e308f4c46545a5cf58788672f2872a9ef",
+      "src/repro_runner/provenance.py": "a089e1009c7cec0dc0b82afac25ce14c71cad6a17a966067e7a2de3f6da33c18",
+      "src/repro_runner/scheduler.py": "6d0b9747399d24930a60ac2118f5b27eba344eaa6adc1fc2a8b287f09a115841",
+      "src/repro_runner/state.py": "9b4071e72e74c8bded1d012e33e0e251980122233aad638065cff8359c9328b6"
+    }
+  },
+  "suites": [
+    "scheduling",
+    "compute",
+    "cache",
+    "recovery"
+  ],
+  "timer": "time.perf_counter_ns; immediately before launch to after process exit"
+}
