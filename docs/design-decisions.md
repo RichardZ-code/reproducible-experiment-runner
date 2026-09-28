@@ -45,6 +45,10 @@ These are proposed choices made in P01, not quotations from the guide.
 | Setuptools, bounded runtime requirements, per-OS pip-tools development locks | Familiar packaging with reproducible development resolution | Pins require target-OS regeneration; builds use the pinned environment without isolation | [Packaging](design.md#a-purpose-and-scope) |
 | Integer recurrence simulation and repository-only examples | Small deterministic computation with independently configurable branches | Synthetic workload does not stand in for every scientific workload | [Example](design.md#m-planned-synthetic-example), [distribution](design.md#o-distribution-and-completion) |
 
+## P02 packaging clarification
+
+The scaffold uses `setuptools>=77` and `wheel` as build requirements. Setuptools 77 or later supports the SPDX `license = "MIT"` and `license-files = ["LICENSE"]` metadata matching the existing license. The macOS lock includes build requirements through pip-tools' `--all-build-deps`; the editable installation uses those installed pins with `--no-build-isolation --no-deps`. This is a packaging detail within the P01 strategy, not a change to the runner's behavior. See [packaging](design.md#a-purpose-and-scope) and the [developer setup](development.md).
+
 ## C. Proposed departures and open decisions
 
 No material departure from the guide is proposed. The refinements above choose behavior where the guide leaves details open. There are no unresolved material design decisions; the whole contract still awaits user review. In particular, review the deliberately narrow paths/globs, conservative environment invalidation, current-directory status/resume convention, and the orphan/external-writer limitations before implementation.

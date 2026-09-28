@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runner and local verification output
+.repro/
+/examples/simulation/out/
+/benchmarks/.work/
+/tests/.work/
