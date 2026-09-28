@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 import repro_runner
@@ -33,18 +34,20 @@ def test_installed_package_and_entry_point() -> None:
 def test_help_exposes_command_surface() -> None:
     result = cli.invoke(app, ["--help"])
     assert result.exit_code == 0
+    help_output = strip_ansi(result.output)
     for command in ("validate", "run", "status", "resume"):
-        assert command in result.output
+        assert command in help_output
 
     for command in ("validate", "run", "status", "resume"):
         result = cli.invoke(app, [command, "--help"])
         assert result.exit_code == 0
-        assert "--help" in result.output
+        help_output = strip_ansi(result.output)
+        assert "--help" in help_output
         if command in ("run", "resume"):
-            assert "--workers" in result.output
+            assert "--workers" in help_output
         if command == "run":
-            assert "--no-cache" in result.output
-            assert "--no-no-cache" not in result.output
+            assert "--no-cache" in help_output
+            assert "--no-no-cache" not in help_output
 
 
 @pytest.mark.parametrize(
