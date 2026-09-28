@@ -1,13 +1,13 @@
 # Phase progress
 
-The user authorized P02 using the reported P01 design as its working contract. This did not include a separate line-by-line design audit. The package and CLI scaffold are installed locally; the runner engine is not implemented. Prepared work, passed checks, user acceptance, and publication are distinct gates.
+The user authorized P03 using the reported P02 scaffold and P01 design as its working contract. This did not include a separate independent P02 audit. Workflow validation is implemented locally; the execution engine is not. Prepared work, passed checks, user acceptance, and publication are distinct gates.
 
 | Phase | Status | Acceptance gate | Evidence | Review/publication |
 |---|---|---|---|---|
 | P00: Setup | Completed per supplied report, with GitHub Desktop fallback | Correct checkout, Python and folder access, identified repository route | Supplied P00 report: clean checkout, compatible bundled Python 3.12, stdlib/SQLite checks, Desktop account and repository verified | Report carried forward; no push demonstrated |
 | P01: Design and rules | Prepared; used as P02 contract | Consistent design, working rules, scope, scenario review, clean documentation checks | Five documents read back; 15 scenario traces reviewed; inline documentation checks passed; tracked diff whitespace check passed | Present at starting commit `9ba930f`; no independent design audit claimed |
-| P02: Project scaffold | Ready for commit review | Project environment, installable package, honest CLI help, smoke tests | Python 3.12.14 project `.venv`; macOS lock resolved with pip-tools 7.6.1; locked dependencies and editable package installed; fresh temporary environment passed 14 smoke tests without an import link; Ruff and pip checks passed | P02 changes unstaged and uncommitted; not pushed |
-| P03: Workflow validation | Not started | Schema/DAG/path rejection before child execution | Pending | Not reviewed or published |
+| P02: Project scaffold | Present at starting commit `175ae9f` | Project environment, installable package, honest CLI help, smoke tests | Reported P02 handoff: Python 3.12.14 project `.venv`; macOS lock resolved with pip-tools 7.6.1; fresh temporary environment passed 14 smoke tests without an import link; Ruff and pip checks passed | Commit observed locally; no push demonstrated |
+| P03: Workflow validation | Ready for review | Schema/DAG/path rejection before child execution | 114 tests passed; installed CLI demonstrations passed for valid and invalid fixtures; Ruff, pip, and diff checks passed | P03 changes unstaged and uncommitted; not pushed |
 | P04: Concurrent execution | Not started | Ordering/concurrency, isolation, logs, failure propagation and cancellation | Pending | Not reviewed or published |
 | P05: Content cache | Not started | Stable identity, verified storage/restore, invalidation and corruption checks | Pending | Not reviewed or published |
 | P06: State and recovery | Not started | Durable attempts, ownership tests, safe resume with/without cache | Pending | Not reviewed or published |
@@ -53,4 +53,13 @@ See [decisions](design-decisions.md) and the [acceptance matrix](design.md#n-ver
 - `runner --help` and all four subcommand help screens exit zero. The temporary command handlers return an explicit nonzero unavailable response and create no `.repro` state. Their smoke tests must be replaced with behavior tests in later phases.
 - The 14 P02 smoke tests pass, including an installed-entry-point subprocess from outside the repository. Ruff check/format and `git diff --check` pass.
 
-P02 awaits user review. P03 through P13 have not started. GitHub Desktop remains the reviewed commit/push route, but no successful push has been demonstrated. No staging, commit, push, or publication occurred in P02.
+The P02 evidence above is attributed to the supplied handoff report. Its files were present at P03's starting commit. GitHub Desktop remains the reviewed commit/push route, but no successful push has been demonstrated.
+
+## P03 evidence and next gate
+
+- `load_workflow` reads one safe YAML document, rejects duplicate keys and unsupported YAML features, builds immutable task values, validates the graph and declared filesystem contract, and returns a workspace-anchored model. `resolve_inputs` rechecks current file membership and types when a task becomes ready; it does not hash or copy files.
+- Local unit and CLI tests cover schema failures, ordering, cycles, paths, symlinks, output ownership, glob overlap, generated inputs, subprocess avoidance, and installed entry-point use outside the checkout. The full suite collected and passed 114 tests without skips.
+- Installed-CLI demonstrations: a four-task diamond and a producer/consumer with an absent generated input exited 0; a cycle, unknown dependency, duplicate task key, unsafe path, and conflicting output ownership each exited 2. The missing generated input failed the internal readiness check until a regular fixture file was created. No `.repro`, output directory, or task marker was created by validation.
+- `.venv/bin/python -m pip check`, Ruff check/format, and `git diff --check` passed. No dependency or lock change was needed.
+
+P03 awaits user review. P04 through P13 have not started. Linux behavior, hosted CI, clean distribution installation, and a successful push remain unverified. No P03 staging, commit, push, or publication occurred.

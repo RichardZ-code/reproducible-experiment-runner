@@ -5,8 +5,11 @@ from typing import Annotated, NoReturn
 
 import typer
 
+from repro_runner.config import load_workflow
+from repro_runner.errors import ValidationError
+
 app = typer.Typer(
-    help="Local workflow runner. Commands are registered but unavailable in P02."
+    help="Local workflow runner. Validation is available; execution and recovery are not."
 )
 
 
@@ -15,11 +18,24 @@ def _unavailable(message: str) -> NoReturn:
     raise typer.Exit(code=3)
 
 
-@app.command(help="Validate a workflow (available in P03).")
+@app.command(help="Validate workflow structure; input availability is checked later.")
 def validate(
     workflow: Annotated[Path, typer.Argument(help="Workflow YAML file")],
 ) -> None:
-    _unavailable("Workflow validation")
+    try:
+        validated = load_workflow(workflow)
+    except ValidationError as error:
+        typer.echo(f"Invalid workflow: {error}", err=True)
+        raise typer.Exit(code=2) from error
+    except OSError as error:
+        typer.echo(f"Cannot inspect workflow: {error}", err=True)
+        raise typer.Exit(code=3) from error
+    count = len(validated.tasks)
+    noun = "task" if count == 1 else "tasks"
+    typer.echo(
+        f"Workflow valid: {count} {noun}. "
+        "Input availability and contents are deferred until task readiness."
+    )
 
 
 @app.command(help="Run a workflow (execution begins in P04).")

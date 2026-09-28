@@ -72,10 +72,8 @@ def test_future_commands_are_explicitly_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "workflow.yaml").write_text("schema_version: 1\n", encoding="utf-8")
 
     commands = [
-        (["validate", "workflow.yaml"], "Workflow validation"),
         (["run", "workflow.yaml", "--workers", "4"], "Workflow execution"),
         (["run", "workflow.yaml", "--no-cache"], "Workflow execution"),
         (["status", "some-run"], "Run status"),
@@ -87,7 +85,7 @@ def test_future_commands_are_explicitly_unavailable(
         assert message in result.output
         assert "not implemented yet" in result.output
 
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["workflow.yaml"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_installed_runner_help_outside_checkout(tmp_path: Path) -> None:

@@ -24,17 +24,18 @@ ln -s ../../../../src/repro_runner .venv/lib/python3.12/site-packages/repro_runn
 
 The link stays inside the ignored `.venv` and points to the editable source. Do not add it when the ordinary editable install already works.
 
-Check the current scaffold:
+Check the current CLI and tests:
 
 ```sh
 .venv/bin/runner --help
 .venv/bin/runner validate --help
+.venv/bin/runner validate WORKFLOW
 .venv/bin/python -m pytest
 .venv/bin/python -m ruff check .
 .venv/bin/python -m ruff format --check .
 ```
 
-The registered workflow commands currently return an explicit unavailable response. See the [design](design.md) for their intended behavior and [progress](progress.md) for phase evidence.
+Replace `WORKFLOW` with a workflow YAML path. Validation checks structure and currently visible path hazards without launching tasks or creating `.repro`; it permits a correctly declared generated input to be absent until readiness. `run`, `status`, and `resume` still return an explicit unavailable response. See the [design](design.md) for the intended behavior and [progress](progress.md) for phase evidence.
 
 Regenerate the macOS lock only when intentionally reviewing dependency changes. In a Python 3.12 environment with pip-tools installed, run:
 
@@ -48,3 +49,5 @@ Regenerate the macOS lock only when intentionally reviewing dependency changes. 
 For a first lock generation, install `pip-tools` in `.venv` before compiling; later runs use its recorded pin. Re-run tests and Ruff after a refresh, review the lock diff and generated provenance, and record the resolver and Python versions. Generate the Linux lock with the same command and `requirements/dev-linux.lock` on Linux. Do not copy or rename the macOS resolution as Linux evidence. The lock includes build requirements; development package builds use `.venv/bin/python -m build --no-isolation` once distribution verification is in scope.
 
 Locally verified in P02: macOS Python 3.12 environment, macOS lock resolution and installation, editable package/entry point, CLI help and unavailable behavior, smoke tests, and Ruff. A second fresh temporary macOS environment passed the documented install and check sequence without an import link. Linux resolution, Linux behavior, hosted CI, and clean wheel/source-distribution installation remain future gates.
+
+P03 locally verified `runner validate` from another directory using the installed entry point, plus schema, graph, path, ownership, glob, and input-readiness tests. These checks do not establish task execution.

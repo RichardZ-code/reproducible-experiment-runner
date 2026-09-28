@@ -2,7 +2,7 @@
 
 A local Python CLI under development for dependency-aware workflows, verified content caching, and recovery of completed work after interruption.
 
-**Current status:** the installable package and CLI help surface are scaffolded. Workflow validation, execution, status, and resume are not implemented yet; their commands return an explicit unavailable message.
+**Current status:** `runner validate WORKFLOW` checks the workflow schema, dependency graph, declared paths, and ownership without running tasks or creating runner state. Input availability and contents are deferred until task readiness. Execution, status, and resume remain unavailable.
 
 Local simulation and data-processing scripts often rerun work unnecessarily or leave uncertain results after interruption. This project aims to make declared inputs, task dependencies, verified outputs, and execution history explicit so completed work can be reused safely within a documented local-workspace contract.
 
