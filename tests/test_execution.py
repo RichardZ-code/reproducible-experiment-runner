@@ -298,7 +298,7 @@ def test_installed_cli_from_other_directory(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert "a: succeeded" in completed.stdout
     assert (workspace / "out/a.txt").read_text() == "a:"
-    assert not (workspace / ".repro/state.sqlite3").exists()
+    assert (workspace / ".repro/state.sqlite3").is_file()
     assert not list((workspace / ".repro").glob("cache/*"))
     assert not list((workspace / ".repro/runs").glob("*/manifest.json"))
     assert list(tmp_path.glob(".repro")) == []
@@ -312,7 +312,7 @@ def test_installed_cli_from_other_directory(tmp_path: Path) -> None:
         check=False,
     )
     assert default.returncode == 0, default.stderr
-    assert "executed=1, cached=0, cache_misses=1" in default.stdout
+    assert "executed=1, retained=0, cached=0, cache_misses=1" in default.stdout
     assert len(events(marker)) == 4
     assert len(list((workspace / ".repro/runs").iterdir())) == 2
     warm = subprocess.run(
@@ -325,7 +325,7 @@ def test_installed_cli_from_other_directory(tmp_path: Path) -> None:
         check=False,
     )
     assert warm.returncode == 0, warm.stderr
-    assert "executed=0, cached=1, cache_misses=0" in warm.stdout
+    assert "executed=0, retained=0, cached=1, cache_misses=0" in warm.stdout
     assert len(events(marker)) == 4
 
 

@@ -1,8 +1,8 @@
 # Reproducible Experiment Runner: v0.1.0 design
 
-**Proposed implementation contract, awaiting user review.**
+**Implementation contract for staged phases.**
 
-The engine is not implemented. The requirements below describe intended behavior, not existing capabilities. [Decisions](design-decisions.md) identify guide requirements and P01 clarifications; [progress](progress.md) records phase evidence and review status.
+The requirements below remain the project contract; implementation is staged through the phase plan. [Decisions](design-decisions.md) record clarifications, and [progress](progress.md) identifies behavior verified so far and work still pending.
 
 ## A. Purpose and scope
 

@@ -134,10 +134,10 @@ def test_abrupt_stop_then_new_run(tmp_path: Path, mode: str) -> None:
         resumed = cli(path)
         assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
         if mode == "before_rename":
-            assert "executed=1, cached=0" in resumed.stdout
+            assert "executed=1, retained=0, cached=0" in resumed.stdout
             assert launches.read_text().splitlines() == ["launched", "launched"]
         else:
-            assert "executed=0, cached=1" in resumed.stdout
+            assert "executed=0, retained=0, cached=1" in resumed.stdout
             assert launches.read_text().splitlines() == ["launched"]
         declared = ("one.txt", "two.txt") if mode == "during_restore" else ("one.txt",)
         for name in declared:

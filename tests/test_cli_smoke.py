@@ -1,4 +1,4 @@
-"""P02 scaffold checks; unavailable-command assertions change in later phases."""
+"""Installed command surface and non-mutating error checks."""
 
 import importlib.metadata
 import os
@@ -68,20 +68,16 @@ def test_usage_errors(args: list[str]) -> None:
     assert "Error" in result.output or "Usage" in result.output
 
 
-def test_recovery_commands_are_explicitly_unavailable(
+def test_recovery_commands_reject_absent_state_without_creating_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    commands = [
-        (["status", "some-run"], "Run status"),
-        (["resume", "some-run", "--workers", "4"], "Run recovery"),
-    ]
-    for args, message in commands:
+    commands = [["status", "some-run"], ["resume", "some-run", "--workers", "4"]]
+    for args in commands:
         result = cli.invoke(app, args)
-        assert result.exit_code == 3
-        assert message in result.output
-        assert "not implemented yet" in result.output
+        assert result.exit_code == 2
+        assert "no .repro state" in result.output
 
     assert list(tmp_path.iterdir()) == []
 

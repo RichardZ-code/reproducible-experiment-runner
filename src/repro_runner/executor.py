@@ -33,6 +33,7 @@ from repro_runner.hashing import (
 )
 from repro_runner.paths import ensure_real_directory as _real_directory
 from repro_runner.paths import inspect_file
+from repro_runner.state import StateStore
 
 TERM_GRACE_SECONDS = 5.0
 State = Literal[
@@ -66,6 +67,10 @@ class TaskResult:
     launched: bool = False
     cache_key: str | None = None
     cache_miss: bool = False
+    cache_lookup: bool = False
+    attempt_no: int | None = None
+    retained: bool = False
+    source_attempt_no: int | None = None
 
 
 @dataclass
@@ -76,6 +81,10 @@ class RunResult:
     started_at: str
     ended_at: str
     duration_seconds: float
+    invocation_no: int = 1
+    uncertain_launches: int = 0
+    use_cache: bool = True
+    task_order: tuple[str, ...] = ()
 
 
 def _now() -> str:
@@ -239,6 +248,65 @@ async def _dependency_outputs(
     return rows
 
 
+async def retain_task(
+    workflow: Workflow,
+    task_id: str,
+    accepted: dict[str, Artifact],
+    stop: asyncio.Event,
+    environment: dict[str, object],
+    state: StateStore,
+) -> TaskResult | None:
+    """Select a committed result only after checking current inputs and outputs."""
+    if stop.is_set():
+        raise InterruptedError("run interrupted before retention")
+    task = workflow.tasks[task_id]
+    names = resolve_inputs(workflow, task_id)
+    snapshots: dict[str, Artifact] = {}
+    for name in names:
+        if stop.is_set():
+            raise InterruptedError("run interrupted during retention")
+        inspect_file(workflow.workspace, name, required=True)
+        snapshot = await _hash(workflow.workspace / name)
+        if name in accepted and snapshot != accepted[name]:
+            raise TaskFailure(f"producer artifact changed: {name!r}", "input")
+        snapshots[name] = snapshot
+    dependencies = await _dependency_outputs(workflow, task, accepted)
+    identity = task_identity(task, snapshots, dependencies, environment)
+    prior = state.prior_result(task_id, identity.key, task.outputs)
+    if prior is None:
+        return None
+    for path, expected in prior.artifacts.items():
+        if stop.is_set():
+            raise InterruptedError("run interrupted during retention")
+        if inspect_file(workflow.workspace, path, required=False) is None:
+            return None
+        if await _hash(workflow.workspace / path) != expected:
+            return None
+    if resolve_inputs(workflow, task_id) != names:
+        raise TaskFailure("input glob membership changed during retention", "input")
+    for name, expected in snapshots.items():
+        inspect_file(workflow.workspace, name, required=True)
+        if await _hash(workflow.workspace / name) != expected:
+            raise TaskFailure(
+                f"input source changed during retention: {name!r}", "input"
+            )
+    if await _dependency_outputs(workflow, task, accepted) != dependencies:
+        raise TaskFailure("dependency outputs changed during retention", "input")
+    if await environment_record() != environment:
+        raise TaskFailure("environment changed during retention", "environment")
+    if stop.is_set():
+        raise InterruptedError("run interrupted during retention")
+    return TaskResult(
+        task_id,
+        prior.state,
+        command=task.command,
+        artifacts=prior.artifacts,
+        cache_key=identity.key,
+        retained=True,
+        source_attempt_no=prior.attempt_no,
+    )
+
+
 async def _freeze_outputs(task: Task, work: Path, publish: Path) -> dict[str, Artifact]:
     artifacts: dict[str, Artifact] = {}
     for name in sorted(task.outputs):
@@ -313,6 +381,7 @@ async def execute_task(
     owner: ProcessOwner,
     cache: CacheStorage | None,
     environment: dict[str, object],
+    state: StateStore,
 ) -> TaskResult:
     task = workflow.tasks[task_id]
     result = TaskResult(task_id, "running", command=task.command)
@@ -326,7 +395,10 @@ async def execute_task(
         names = resolve_inputs(workflow, task_id)
         result.started_at = _now()
         start = time.monotonic()
-        attempt = run_dir / "attempts" / task_id / "1"
+        result.attempt_no = state.allocate_attempt(
+            task_id, task.command, result.started_at
+        )
+        attempt = run_dir / "attempts" / task_id / str(result.attempt_no)
         work = attempt / "work"
         publish = attempt / "publish"
         work.mkdir(parents=True)
@@ -341,6 +413,14 @@ async def execute_task(
         dependency_rows = await _dependency_outputs(workflow, task, accepted)
         identity = task_identity(task, snapshots, dependency_rows, environment)
         result.cache_key = identity.key
+        state.record_identity(
+            task_id,
+            result.attempt_no,
+            identity,
+            snapshots,
+            dependency_rows,
+            environment,
+        )
 
         async def publish_outputs(artifacts: dict[str, Artifact]) -> None:
             try:
@@ -365,11 +445,13 @@ async def execute_task(
                 ) from error
 
         if cache is not None:
+            result.cache_lookup = True
             try:
                 cached = await cache.lookup(identity, task.outputs, owner.stop)
             except OSError as error:
                 raise CacheOperationalError(f"cache lookup failed: {error}") from error
             if cached is not None:
+                state.mark_restore(task_id, result.attempt_no)
                 try:
                     await cache.restore(identity, cached, publish, owner.stop)
                 except InvalidEntry as error:
@@ -402,11 +484,24 @@ async def execute_task(
                 raise InterruptedError("run interrupted before launch")
             command = _command(task)
             result.resolved_executable = command[0]
+            resolution_kind = (
+                "runner_python"
+                if task.command[0] in {"python", "python3", "python3.12"}
+                else "path_program"
+            )
+            state.launch_requested(
+                task_id,
+                result.attempt_no,
+                result.stdout,
+                result.stderr,
+                resolution_kind,
+            )
             try:
                 process = await owner.launch(command, work, stdout, stderr)
             except OSError as error:
                 raise TaskFailure(f"launch failed: {error}", "launch") from error
             result.launched = True
+            state.launch_confirmed(task_id, result.attempt_no)
             wait_child = asyncio.create_task(process.wait())
             wait_stop = asyncio.create_task(owner.stop.wait())
             try:
@@ -416,6 +511,7 @@ async def execute_task(
                 if wait_stop in done and owner.stop.is_set():
                     await owner.cancel_all()
                 result.exit_code = await wait_child
+                state.child_exited(task_id, result.attempt_no, result.exit_code)
             finally:
                 wait_stop.cancel()
                 await asyncio.gather(wait_stop, return_exceptions=True)
@@ -472,6 +568,15 @@ async def execute_task(
         if process is not None:
             await owner.cancel_all()
             await process.wait()
+        raise
+    except BaseException:
+        owner.stop.set()
+        if process is not None and process.returncode is None:
+            try:
+                await owner.cancel_all()
+                await process.wait()
+            except BaseException:
+                pass
         raise
     finally:
         if cache is not None and cache_temporary is not None:

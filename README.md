@@ -2,13 +2,13 @@
 
 A local Python CLI under development for dependency-aware workflows, verified content caching, and recovery of completed work after interruption.
 
-**Current status:** `runner validate WORKFLOW` checks the workflow structure without running tasks or creating runner state. `runner run WORKFLOW` executes eligible tasks in private attempt directories and stores verified declared outputs in `.repro/cache/v1/`. An unchanged run verifies each entry and restores outputs without launching its task command. `--no-cache` executes tasks without reading or writing the cache. Independent branches can overlap up to the worker limit; failed branches block their descendants. `status` and `resume` remain unavailable.
+**Current status:** `runner validate WORKFLOW` checks the workflow without launching tasks. `runner run WORKFLOW` executes ready tasks with bounded concurrency and records attempts, outputs, and outcomes in the workflow directory's `.repro/state.sqlite3`. `runner status RUN_ID` reads those records. `runner resume RUN_ID` rechecks the original workflow and current inputs and outputs, then retains verified completed work, restores from a verified cache entry, or starts a new attempt. Resume also works for runs started with `--no-cache`.
 
-Run IDs name attempt directories under the workflow workspace's `.repro/runs/`. Outcomes currently exist only in memory during a run. A cache hit still requires current declared inputs and restores the full declared output set; old workspace outputs alone never authorize reuse. Cached commands do not replay external side effects. An interrupted run cannot yet be resumed, although a new run can verify and reuse a complete cache entry. The [development guide](docs/development.md) has the installed CLI commands and current limitations.
+Run and resume hold one workspace lock. A run ID remains stable across invocations, while each executed or restored attempt gets a new numbered directory and separate logs. Status and resume look for `.repro` in the current directory, so enter the workflow directory first. A P05-era attempt directory without a database cannot be resumed automatically. See the [development guide](docs/development.md) for commands and details.
 
-Local simulation and data-processing scripts often rerun work unnecessarily or leave uncertain results after interruption. This project aims to make declared inputs, task dependencies, verified outputs, and execution history explicit so completed work can be reused safely within a documented local-workspace contract.
+Recovery verifies declared inputs and outputs within a local-workspace contract. Commands are trusted and may have undeclared inputs or external side effects; they are not exactly-once operations. Abrupt parent death can leave an old child running in its private attempt directory. Manifests and the seeded example are planned for P07 and are not implemented here.
 
 - [Proposed implementation contract](docs/design.md)
 - [Design decisions and limitations](docs/design-decisions.md)
 - [Phase progress and acceptance gates](docs/progress.md)
-- [Development setup and scaffold checks](docs/development.md)
+- [Development setup](docs/development.md)
