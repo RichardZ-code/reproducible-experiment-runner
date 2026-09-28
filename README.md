@@ -12,7 +12,7 @@ Simulation scripts often form a dependency graph: generate inputs, run independe
 
 ## Quick Start
 
-The repository is currently private, so cloning requires an account with access. The block uses HTTPS Git authentication; if your account is authenticated only in GitHub Desktop, clone `RichardZ-code/reproducible-experiment-runner` there and continue from the `cd` line in that new checkout. Use an installed Python **3.12** interpreter. If `python3.12` is not on `PATH`, set `PYTHON312` to the command or path for an installed 3.12 interpreter before running the block. The example files come from the source checkout, not the wheel.
+If the repository is private, cloning requires an account with access. The block uses HTTPS Git authentication; if your account is authenticated only in GitHub Desktop, clone `RichardZ-code/reproducible-experiment-runner` there and continue from the `cd` line in that new checkout. Use an installed Python **3.12** interpreter. If `python3.12` is not on `PATH`, set `PYTHON312` to the command or path for an installed 3.12 interpreter before running the block. The example files come from the source checkout, not the wheel.
 
 ```sh
 git clone https://github.com/RichardZ-code/reproducible-experiment-runner.git
@@ -102,7 +102,7 @@ The computation profile used seed 1729, 5,000 samples, and 1,000 steps per branc
 
 ## Testing
 
-The suite covers validation, scheduling, caching, interruption/recovery, provenance, packaging, and the benchmark harness. The [P10 hosted run](https://github.com/RichardZ-code/reproducible-experiment-runner/actions/runs/36475597673) passed on Ubuntu 24.04 x86_64 and macOS 15 arm64 at commit `d7673b5`: each job reported 253 tests with zero skips, Ruff checks, wheel and source builds, clean consumer installations, and benchmark smoke. This verifies that committed revision, not later local documentation changes. After the development dependencies are installed as described in the contributor setup, run the current checkout's suite with `.venv/bin/python -m pytest`; contributor setup and hosted evidence are in [development](docs/development.md) and [CI verification](docs/ci.md).
+The suite covers validation, scheduling, caching, interruption/recovery, provenance, packaging, and the benchmark harness. The [P12 hosted run](https://github.com/RichardZ-code/reproducible-experiment-runner/actions/runs/36487731537) passed on Ubuntu 24.04 x86_64 and macOS 15 arm64 at commit `7b43117`: each job reported 254 tests with zero skips, Ruff checks, wheel and source builds, clean consumer installations, and benchmark smoke. A later [documentation-only run](https://github.com/RichardZ-code/reproducible-experiment-runner/actions/runs/36488661541) passed the same checks at `91a7030`. After the development dependencies are installed as described in the contributor setup, run the current checkout's suite with `.venv/bin/python -m pytest`; contributor setup and hosted evidence are in [development](docs/development.md) and [CI verification](docs/ci.md). The [progress record](docs/progress.md) gives later release evidence.
 
 ## Design Decisions
 
@@ -129,4 +129,4 @@ This is a local, single-owner workspace runner for declared regular-file artifac
 
 ## Future Work
 
-A separate final audit and release review remain. Possible later work includes broader environment capture and cache maintenance, but neither is implemented or promised here. The [progress record](docs/progress.md) distinguishes completed checks from pending review and publication.
+The final audit closed in P12. The [progress record](docs/progress.md) distinguishes prepared release work from approved publication and verification. Broader environment capture and cache maintenance are possible later work, but neither is implemented or promised here.
