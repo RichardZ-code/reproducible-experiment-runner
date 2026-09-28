@@ -68,14 +68,12 @@ def test_usage_errors(args: list[str]) -> None:
     assert "Error" in result.output or "Usage" in result.output
 
 
-def test_future_commands_are_explicitly_unavailable(
+def test_recovery_commands_are_explicitly_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     commands = [
-        (["run", "workflow.yaml", "--workers", "4"], "Workflow execution"),
-        (["run", "workflow.yaml", "--no-cache"], "Workflow execution"),
         (["status", "some-run"], "Run status"),
         (["resume", "some-run", "--workers", "4"], "Run recovery"),
     ]
@@ -85,6 +83,13 @@ def test_future_commands_are_explicitly_unavailable(
         assert message in result.output
         assert "not implemented yet" in result.output
 
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_run_rejects_missing_workflow_without_runtime_state(tmp_path: Path) -> None:
+    result = cli.invoke(app, ["run", str(tmp_path / "workflow.yaml")])
+    assert result.exit_code == 2
+    assert "workflow file not found" in result.output
     assert list(tmp_path.iterdir()) == []
 
 

@@ -1,6 +1,6 @@
 # Design decisions
 
-Status: proposed in P01, awaiting user review. These records explain the [implementation contract](design.md); they do not claim implemented behavior.
+Status: P01 decisions are the working contract for staged implementation. The P04 clarification below describes local work awaiting review; other rows do not claim completed behavior.
 
 ## A. Requirements carried forward from the guide
 
@@ -48,6 +48,12 @@ These are proposed choices made in P01, not quotations from the guide.
 ## P02 packaging clarification
 
 The scaffold uses `setuptools>=77` and `wheel` as build requirements. Setuptools 77 or later supports the SPDX `license = "MIT"` and `license-files = ["LICENSE"]` metadata matching the existing license. The macOS lock includes build requirements through pip-tools' `--all-build-deps`; the editable installation uses those installed pins with `--no-build-isolation --no-deps`. This is a packaging detail within the P01 strategy, not a change to the runner's behavior. See [packaging](design.md#a-purpose-and-scope) and the [developer setup](development.md).
+
+## P04 sequencing clarification
+
+The P04 request moves the minimal OS-backed `.repro/lock` guard into concurrent execution because P04 now publishes shared workspace outputs. The checklist originally groups ownership with P06. P04 holds a nonblocking `fcntl.flock` through ordinary execution and cleanup, including cancellation. It does not add SQLite state, owner-death reconciliation, or resume; those remain P06. P04 also uses private attempt copies and streaming SHA-256 checks solely for live-run input and output acceptance. Cache identity and storage remain P05.
+
+A task slot covers readiness checks, staging, child execution, verification, and publication. This keeps at most `workers` active attempts and releases a slot only after task finalization. Output replacement is per-file and sorted; several replacements are not one atomic transaction. P04 does not roll back a partially published set after a later replacement fails. The existing five-second group-wide TERM grace applies on ordinary cancellation, followed by KILL of still-owned groups. A second signal skips the remaining grace period.
 
 ## C. Proposed departures and open decisions
 
